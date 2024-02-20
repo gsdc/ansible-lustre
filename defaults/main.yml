@@ -1,6 +1,6 @@
 ---
 # defaults file for ansible-lustre
-
+type: client
 lustre_version: 2.15.4-1
 client_packages:
   - "lustre-client-dkms-{{ lustre_version }}.el{{ ansible_distribution_major_version }}.noarch.rpm" 

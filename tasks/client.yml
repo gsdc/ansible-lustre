@@ -1,0 +1,37 @@
+---
+# tasks file for ansible-lustre
+- name: Enable powertools repo for CentOS8 variation.
+  command: dnf config-manager --set-enabled powertools
+  when:
+    - ansible_distribution_major_version == "8"
+    - (ansible_distribution == "AlmaLinux") or (ansible_distribution == "Rocky") or (ansible_distribution == "CentOS")
+- name: Enable CRB repo for RHEL9 variation.
+  command: dnf config-manager --set-enabled crb
+  when:
+    - ansible_distribution_major_version == "9"
+    - (ansible_distribution == "AlmaLinux") or (ansible_distribution == "Rocky") or (ansible_distribution == "CentOS")
+- name: Install Development Packages to compile lustre module
+  dnf: 
+    name: 
+      - '@Development Tools' 
+      - kernel-devel
+      - openssl-devel
+      - libmount-devel
+      - libnl3-devel
+      - libselinux-devel 
+      - libselinux-static
+      - zlib-devel
+      - libyaml-devel
+      - libtool
+      - rpmrebuild
+- name: Copy Lustre DKMS module
+  copy:
+    src: "files/{{ item }}"
+    dest: "/root/{{ item }}"
+  with_items: "{{ client_packages }}"
+- name: Install Lustre DKMS module
+  dnf:
+    name: "/root/{{ item }}"
+    state: present
+    disable_gpg_check: yes
+  with_items: "{{ client_packages }}"
