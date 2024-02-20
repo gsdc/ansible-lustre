@@ -13,7 +13,10 @@ Role Variables
 --------------
 
 * type: Client or Server [ Current, only "client" is supported ]
-* lustre_version: lustre package version on repository 
+* lustre_version: lustre package version on repository
+   * Almalinux9 => 2.15.4-1
+   * CentOS7 => 2.15.0.4_rc2_cray_134_gb93242d-1
+     
 
 Dependencies
 ------------
