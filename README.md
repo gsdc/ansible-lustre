@@ -6,7 +6,8 @@ Install Lustre client kernel module for GSDC system
 Requirements
 ------------
 
-None
+* kernel
+* kernel-devel  
 
 Role Variables
 --------------
