@@ -1,2 +1,26 @@
 ---
 # tasks file for ansible-lustre
+- name: Install Development Packages to compile lustre module
+  dnf: 
+    name: 
+      - '@Development Tools' 
+      - kernel-devel
+      - openssl-devel
+      - libmount-devel
+      - libnl3-devel
+      - libselinux-devel 
+      - libselinux-static
+      - zlib-devel
+      - libyaml-devel
+      - libtool
+      - rpmrebuild
+- name: Copy Lustre DKMS module
+  copy:
+    src: "files/{{ item }}"
+    dest: "/root/{{ item }}"
+  with_items: client_packages
+- name: Install Lustre DKMS module
+  dnf:
+    name: "/root/{{ item }}"
+    state: present
+  with_items: client_packages
