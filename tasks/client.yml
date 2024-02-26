@@ -35,3 +35,13 @@
     state: present
     disable_gpg_check: yes
   with_items: "{{ client_packages }}"
+- name: Find Private network interfarce
+  set_fact:
+    private_interface: "{{ hostvars[inventory_hostname]['ansible_'+item]['device'] }}"
+  when:
+    - hostvars[inventory_hostname]['ansible_' + item].ipv4 is defined
+    - hostvars[inventory_hostname]['ansible_' + item]['ipv4']['address'] | ipaddr('192.168.0.0/16')
+  with_items: "{{ ansible_interfaces }}"
+- copy:
+    dest: /etc/modprobe.d/lustre.conf
+    content: "options lnet networks=\"tcp({{ private_interface }})\"\n"
