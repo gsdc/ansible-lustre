@@ -10,6 +10,18 @@
   when:
     - ansible_distribution_major_version == "9"
     - (ansible_distribution == "AlmaLinux") or (ansible_distribution == "Rocky") or (ansible_distribution == "CentOS")
+- name: Install python3-netaddr
+  dnf:
+    name: python3-netaddr
+    state: installed
+  when:
+      - (ansible_distribution_major_version == "8") or (ansible_distribution_major_version == "9")
+- name: Install python2-netaddr for CentOS7
+  yum:
+    name: python-netaddr
+    state: installed
+  when:
+      - (ansible_distribution_major_version == "7")
 - name: Install Development Packages to compile lustre module
   dnf: 
     name: 
