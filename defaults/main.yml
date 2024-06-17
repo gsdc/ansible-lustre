@@ -5,3 +5,7 @@ lustre_version: 2.15.4-1
 client_packages:
   - "lustre-client-dkms-{{ lustre_version }}.el{{ ansible_distribution_major_version }}.noarch.rpm" 
   - "lustre-client-{{ lustre_version }}.el{{ ansible_distribution_major_version }}.x86_64.rpm" 
+client_packages_alma9.4:
+  - "kmod-lustre-client-2.15.63-1.el9.x86_64.rpm"
+  - "lustre-client-2.15.63-1.el9.x86_64.rpm"
+  - "lustre-iokit-2.15.63-1.el9.x86_64.rpm"
