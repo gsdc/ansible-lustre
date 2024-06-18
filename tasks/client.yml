@@ -76,3 +76,5 @@
 - copy:
     dest: /etc/modprobe.d/lustre.conf
     content: "options lnet networks=\"tcp({{ private_interface }})\"\n"
+- name: 커널 모듈 의존성 트리 재생성
+  shell: "/usr/sbin/depmod -a"
