@@ -50,18 +50,22 @@
         disable_gpg_check: yes
       with_items: "{{ client_packages }}"
   when: (ansible_distribution_major_version == "7")
-- name: Alma9.4에서 Lustre를 설치
+- name: Alma9.4 이상에서 Lustre를 설치
   block:
     - name: Copy Lustre client packages 
       copy:
         src: "files/{{ item }}"
         dest: "/root/{{ item }}"
-      with_items: "{{ client_packages_alma9.4 }}"
+      with_items: "{{ client_packages_alma94 }}"
     - name: Install Lustre clinet
       dnf:
         name: "/root/{{ item }}"
         state: present
         disable_gpg_check: yes
+      with_items: "{{ client_packages_alma94 }}"
+  when: 
+    - ansible_distribution_version is version_compare("9.4",">=")
+
 - name: Find Private network interfarce
   set_fact:
     private_interface: "{{ hostvars[inventory_hostname]['ansible_'+item]['device'] }}"
