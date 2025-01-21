@@ -23,7 +23,7 @@
   when:
       - (ansible_distribution_major_version == "7")
 - include_vars:
-    file: "os_{{ ansible_facts['distribution'] }}{ ansible_facts['distribution_version'} }}.yml"
+    file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}.yml"
 - name: Install Development Packages to compile lustre module
   yum: 
     name: 
@@ -42,7 +42,7 @@
   block:
     - name: Lustre 패키지를 머신으로 복사
       copy:
-        src: "files/{{ item }}"
+        src: "files/{{ ansible_distribution }}{{ ansible_distribution_version}}/{{ item }}"
         dest: "/root/{{ item }}"
       with_items: "{{ client_packages }}"
     - name: Install Lustre module
