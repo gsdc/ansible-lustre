@@ -22,6 +22,8 @@
     state: installed
   when:
       - (ansible_distribution_major_version == "7")
+- include_vars:
+    file: "os_{{ ansible_facts['distribution'] }}{ ansible_facts['distribution_version'} }}.yml"
 - name: Install Development Packages to compile lustre module
   yum: 
     name: 
@@ -36,35 +38,19 @@
       - libyaml-devel
       - libtool
       - rpmrebuild
-- name: CentOS7에서 Lustre를 DKMS로 설치
+- name: Lustre를 패키지 설치
   block:
-    - name: Copy Lustre DKMS module
+    - name: Lustre 패키지를 머신으로 복사
       copy:
         src: "files/{{ item }}"
         dest: "/root/{{ item }}"
       with_items: "{{ client_packages }}"
-    - name: Install Lustre DKMS module
+    - name: Install Lustre module
       yum:
         name: "/root/{{ item }}"
         state: present
         disable_gpg_check: yes
       with_items: "{{ client_packages }}"
-  when: (ansible_distribution_major_version == "7")
-- name: Alma9.4 이상에서 Lustre를 설치
-  block:
-    - name: Copy Lustre client packages 
-      copy:
-        src: "files/{{ item }}"
-        dest: "/root/{{ item }}"
-      with_items: "{{ client_packages_alma94 }}"
-    - name: Install Lustre clinet
-      dnf:
-        name: "/root/{{ item }}"
-        state: present
-        disable_gpg_check: yes
-      with_items: "{{ client_packages_alma94 }}"
-  when: 
-    - ansible_distribution_version is version_compare("9.4",">=")
 
 - name: Find Private network interfarce
   set_fact:

@@ -1,0 +1,4 @@
+---
+client_packages:
+  - "{{ ansible_distribution }}{{ ansible_distribution_version}}/lustre-client-2.15.0.4_rc2_cray_134_gb93242d-1.el7.x86_64.rpm" 
+  - "{{ ansible_distribution }}{{ ansible_distribution_version}}/lustre-client-dkms-2.15.0.4_rc2_cray_134_gb93242d-1.el7.noarch.rpm"
