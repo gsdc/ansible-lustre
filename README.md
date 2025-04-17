@@ -2,8 +2,9 @@ gsdc.lustre
 =========
 * GSDC 시스템에서 Lustre 관련 패키지 및 커널모듈을 설치합니다.
 * OS 버전별 설치하는 클라이언트 버전이 달라야 합니다. OS별로 현재 자동 설정되도록 하였습니다.
-   * Almalinux9.4 or higher => 2.15.63-1
+   * Almalinux9.4 => 2.15.63-1
      * Whamcloud 소스코드를 기반으로 생성하였으며 이후 변경 필요. minor 버전 업그레이드(9.4->9.5) 시 호환성 체크 필수!
+   * Almalinux9.5 => 2.15.5_4_cray_2_ge8817da-1 
    * CentOS7 => 2.15.0.4_rc2_cray_134_gb93242d-1 (DKMS 방식)
 
 Requirements
