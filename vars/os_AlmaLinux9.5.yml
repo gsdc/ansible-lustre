@@ -1,6 +1,5 @@
 ---
 client_packages:
-  - "kmod-lustre-client-2.15.5.4_cray_2_ge8817da-1.el9.x86_64.rpm"
-  - "lustre-client-2.15.5.4_cray_2_ge8817da-1.el9.x86_64.rpm"
-  - "lustre-client-debuginfo-2.15.5.4_cray_2_ge8817da-1.el9.x86_64.rpm"
-  - "lustre-client-iokit-2.15.5.4_cray_2_ge8817da-1.el9.x86_64.rpm"
+  - "lustre-client-2.15.6.1_cray_43_g9e7b3db-1.el9.x86_64.rpm"
+  - "lustre-client-dkms-2.15.6.1_cray_43_g9e7b3db-1.el9.noarch.rpm"
+  - "lustre-client-iokit-2.15.6.1_cray_43_g9e7b3db-1.el9.x86_64.rpm"
