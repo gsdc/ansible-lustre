@@ -1,3 +1,4 @@
 ---
 # defaults file for ansible-lustre
 type: client
+lustre_network: "192.168.0.0/16"

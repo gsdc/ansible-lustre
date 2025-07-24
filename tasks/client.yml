@@ -56,8 +56,10 @@
   set_fact:
     private_interface: "{{ hostvars[inventory_hostname]['ansible_'+item]['device'] }}"
   when:
+    - hostvars[inventory_hostname]['ansible_' + item] is defined
     - hostvars[inventory_hostname]['ansible_' + item].ipv4 is defined
-    - hostvars[inventory_hostname]['ansible_' + item]['ipv4']['address'] | ipaddr('192.168.0.0/16')
+    - hostvars[inventory_hostname]['ansible_' + item]['ipv4']['address'] is defined
+    - (hostvars[inventory_hostname]['ansible_' + item]['ipv4']['address'] | ansible.utils.ipaddr(lustre_network))
   with_items: "{{ ansible_interfaces }}"
 - copy:
     dest: /etc/modprobe.d/lustre.conf
