@@ -25,7 +25,7 @@
 - include_vars:
     file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}.yml"
 - name: Install Development Packages to compile lustre module
-  yum: 
+  package: 
     name: 
       - '@Development Tools' 
       - kernel-devel
@@ -38,6 +38,7 @@
       - libyaml-devel
       - libtool
       - rpmrebuild
+    state: present
 - name: Lustre를 패키지 설치
   block:
     - name: Lustre 패키지를 머신으로 복사
