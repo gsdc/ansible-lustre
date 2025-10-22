@@ -43,7 +43,7 @@
   block:
     - name: Lustre 패키지를 머신으로 복사
       copy:
-        src: "files/{{ ansible_distribution }}{{ ansible_distribution_version}}/{{ item }}"
+        src: "files/{{ ansible_distribution }}{{ ansible_distribution_version}}_{{ vendor }}/{{ item }}"
         dest: "/root/{{ item }}"
       with_items: "{{ client_packages }}"
     - name: Install Lustre module

@@ -1,0 +1,5 @@
+---
+client_packages:
+  - "lustre-client-dkms-2.15.7-1.el9.noarch.rpm"
+  - "lustre-iokit-2.15.7-1.el9.x86_64.rpm"
+  - "lustre-client-2.15.7-1.el9.x86_64.rpm"
