@@ -27,7 +27,7 @@
     name: python-netaddr
     state: installed
   when:
-      - (ansible_distribution_major_version == "7")i
+      - (ansible_distribution_major_version == "7")
 - include_vars:
     file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}_{{ vendor }}.yml"
 - name: Install Development Packages to compile lustre module
