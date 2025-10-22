@@ -1,7 +1,7 @@
 ---
 client_packages:
-  - "lustre-client-2.15.6.1_cray_78_g63f9d29-1.el9.x86_64.rpm"
   - "lustre-client-dkms-2.15.6.1_cray_78_g63f9d29-1.el9.noarch.rpm"
   - "lustre-client-iokit-2.15.6.1_cray_78_g63f9d29-1.el9.x86_64.rpm"
+  - "lustre-client-2.15.6.1_cray_78_g63f9d29-1.el9.x86_64.rpm"
 
 
