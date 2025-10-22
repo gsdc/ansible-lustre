@@ -16,12 +16,18 @@
     state: installed
   when:
       - (ansible_distribution_major_version == "8") or (ansible_distribution_major_version == "9")
+- name: Install ansible-collection-ansible-utils for Almalinux9
+  dnf:
+    name: ansible-collection-ansible-utils
+    state: installed
+  when:
+      - ansible_distribution_major_version == "9"
 - name: Install python2-netaddr for CentOS7
   yum:
     name: python-netaddr
     state: installed
   when:
-      - (ansible_distribution_major_version == "7")
+      - (ansible_distribution_major_version == "7")i
 - include_vars:
     file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}_{{ vendor }}.yml"
 - name: Install Development Packages to compile lustre module
