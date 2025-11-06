@@ -39,7 +39,7 @@ Including an example of how to use your role (for instance, with variables passe
 ```bash
 - hosts: my_nodes
   vars:
-      vendor: cray
+      vendor: "cray"
   roles:
     - role: gsdc.lustre  
   become: yes
