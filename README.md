@@ -40,6 +40,7 @@ Including an example of how to use your role (for instance, with variables passe
 - hosts: my_nodes
   vars:
       vendor: "cray"
+      lustre_network: "192.168.0.0/16"
   roles:
     - role: gsdc.lustre  
   become: yes
