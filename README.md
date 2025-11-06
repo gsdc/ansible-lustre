@@ -20,6 +20,17 @@ Dependencies
 ------------
 A list of other roles hosted on Galaxy should go here, plus any details in regards to parameters that may need to be set for other roles, or variables that are used from other roles.
 
+Create ```install_lustre_role.yml```
+```yaml
+---
+roles:
+  - src: https://github.com/gsdc/ansible-lustre.git
+    name: gsdc.lustre
+```
+Run install lustre role script using ansible-galaxy.
+```bash
+ansible-galaxy install -r install_lustre_role.yml --ignore-errors
+```
 Example Playbook
 ----------------
 
@@ -31,6 +42,7 @@ Including an example of how to use your role (for instance, with variables passe
     - gsdc.lustre
   vars:
     type: "client"    
+    vendor: "cray"
   become: yes
 ```
 License
