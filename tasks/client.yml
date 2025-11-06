@@ -44,6 +44,7 @@
       - libyaml-devel
       - libtool
       - rpmrebuild
+      - dkms
     state: present
 - name: Lustre를 패키지 설치
   block:
