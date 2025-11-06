@@ -38,11 +38,10 @@ Including an example of how to use your role (for instance, with variables passe
 -------
 ```bash
 - hosts: my_nodes
-  roles:
-    - gsdc.lustre
   vars:
-    type: "client"    
-    vendor: "cray"
+      vendor: cray
+  roles:
+    - role: gsdc.lustre  
   become: yes
 ```
 License
