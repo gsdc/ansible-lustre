@@ -1,4 +1,7 @@
 ---
+kmod_url: "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p1552383989/v276530/lustre-cray-2.15.B23.ga54ba8.zip"
+dkms_url: "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p1552383989/v276530/2.15.7.1_cray_20_ga54ba87_x86_64_dkms.tgz"
+
 client_packages:
   - "lustre-client-dkms-2.15.6.1_cray_78_g63f9d29-1.el9.noarch.rpm"
   - "lustre-client-iokit-2.15.6.1_cray_78_g63f9d29-1.el9.x86_64.rpm"
