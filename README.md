@@ -13,7 +13,7 @@ Requirements
 Role Variables
 --------------
 * type: Client or Server [ Current, only "client" is supported ]
-* vendor: "cray"[default], "ddn"
+* lustre_vendor: "cray"[default], "ddn"
 * lustre_network: Lustre 스토리지와 연결될때 사용하는 네트워크 주소 예) 10.0.0.0/8
 
 Dependencies
@@ -38,11 +38,10 @@ Including an example of how to use your role (for instance, with variables passe
 -------
 ```bash
 - hosts: my_nodes
-  vars:
-      vendor: "cray"
-      lustre_network: "192.168.0.0/16"
   roles:
     - role: gsdc.lustre  
+      lustre_vendor: "cray"
+      lustre_network: "192.168.0.0/16"
   become: yes
 ```
 License
