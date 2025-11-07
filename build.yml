@@ -1,0 +1,72 @@
+---
+- hosts: localhost
+  connection: local
+  become: true
+  vars_files:
+    - "defaults/main.yml"
+
+  tasks:
+  # tasks file for ansible-lustre
+  - name: Enable powertools repo for CentOS8 variation.
+    command: dnf config-manager --set-enabled powertools
+    when:
+      - ansible_distribution_major_version == "8"
+      - (ansible_distribution == "AlmaLinux") or (ansible_distribution == "Rocky") or (ansible_distribution == "CentOS")
+  - name: Enable CRB repo for RHEL9 variation.
+    command: dnf config-manager --set-enabled crb
+    when:
+      - ansible_distribution_major_version == "9"
+      - (ansible_distribution == "AlmaLinux") or (ansible_distribution == "Rocky") or (ansible_distribution == "CentOS")
+  - name: Install python3-netaddr
+    dnf:
+      name: python3-netaddr
+      state: installed
+    when:
+        - (ansible_distribution_major_version == "8") or (ansible_distribution_major_version == "9")
+  - name: Install ansible-collection-ansible-utils for Almalinux9
+    dnf:
+      name: ansible-collection-ansible-utils
+      state: installed
+    when:
+        - ansible_distribution_major_version == "9"
+  - name: Install python2-netaddr for CentOS7
+    yum:
+      name: python-netaddr
+      state: installed
+    when:
+        - (ansible_distribution_major_version == "7")
+  - include_vars:
+      file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}_{{ lustre_vendor }}.yml"
+  - name: Install Development Packages to compile lustre module
+    package: 
+      name: 
+        - '@Development Tools' 
+        - kernel-devel
+        - openssl-devel
+        - libmount-devel
+        - libnl3-devel
+        - libselinux-devel 
+        - libselinux-static
+        - zlib-devel
+        - libyaml-devel
+        - libtool
+        - rpmrebuild
+        - dkms
+        - kernel-abi-stablelists
+        - kernel-rpm-macros 
+      state: present
+  - name: Download kmod fiile
+    get_url: 
+      url: "{{ kmod_url }}"
+      dest: "/root/{{ kmod_url | basename }}"
+      mode: "0644"
+  - name: Unarchive the kmod file
+    unarchive:
+      src: "/root/{{ kmod_url | basename }}"
+      dest: "/root"
+      remote_src: true
+  - name: Install srpm file
+    shell: "rpm -ivh /root/rpmbuild/*.src.rpm"
+  - name: rpmrebuild
+    shell: "rpmbuild -bb --without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib /root/rpmbuild/SPEC/lustre.spec"
+
