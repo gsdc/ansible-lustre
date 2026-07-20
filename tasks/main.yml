@@ -1,5 +1,5 @@
 ---
 # tasks file for ansible-lustre
 
-- name: Exeucte HTCondor step
+- name: "Exeucte Lustre {{ type }} step"
   include_tasks: "{{ type }}.yml"
