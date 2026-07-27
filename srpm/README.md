@@ -72,6 +72,15 @@ kernel-devel 등을 새로 설치하고 재부팅하는 건 낭비이므로, `.g
 GitHub Release 애셋은 파일당 2GiB 제한이 있어서, 이미지가 이 이상 커지면
 저장 방식을 바꿔야 할 수 있습니다.
 
+## 컴파일된 RPM 배포 (GitHub Release)
+
+`produces_dkms: false`인 target이 실제로 컴파일에 성공하면(모듈 로드 검증까지
+통과하면), 결과 rpm 전체를 `lustre-<label>-<source-tarball-이름>` (예:
+`lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255`) 태그의 GitHub Release로도
+올립니다. 같은 태그로 다시 빌드하면 애셋을 덮어씁니다(`--clobber`). CI run에
+종속되어 90일 후 만료되는 Artifact와 달리, 이 Release는 삭제하기 전까지 영구
+보관됩니다.
+
 ## 참고
 
 - `distribution`은 `AlmaLinux`, `Rocky`, `CentOS` 중 하나를 사용합니다(`vars/os_*.yml`

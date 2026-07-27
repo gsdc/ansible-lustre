@@ -14,7 +14,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   discover:
@@ -278,6 +278,25 @@ jobs:
           name: lustre-${{ matrix.label }}
           path: RPMS/**/*.rpm
           if-no-files-found: error
+
+      - name: Publish built RPMs to GitHub Release
+        if: ${{ !matrix.produces_dkms }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_NAME: ${{ matrix.source }}
+        run: |
+          set -euo pipefail
+          mapfile -t rpm_files < <(find RPMS -type f -name '*.rpm')
+          if [ "${#rpm_files[@]}" -eq 0 ]; then
+            echo "::error::No rpm files found under RPMS/ to publish"
+            exit 1
+          fi
+          source_base="${SOURCE_NAME%.tar.gz}"
+          tag="lustre-${{ matrix.label }}-${source_base}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
+            --title "Lustre client RPMs: ${{ matrix.label }} (${SOURCE_NAME})" \
+            --notes "Compiled from srpm/${SOURCE_NAME} for ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}). Built and modprobe-verified against a real kernel by .github/workflows/build.yml."
+          gh release upload "$tag" "${rpm_files[@]}" --clobber
 
       - name: Shut down VM
         if: always() && !matrix.produces_dkms
