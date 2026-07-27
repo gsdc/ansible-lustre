@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   discover:
     name: Discover build targets
@@ -30,7 +33,10 @@ jobs:
     # real VM with the target distro's own GenericCloud image over
     # QEMU/KVM (GitHub-hosted ubuntu-latest runners expose /dev/kvm), so
     # the compiled kmod-lustre-client is built and modprobe'd against a
-    # genuine matching kernel.
+    # genuine matching kernel. If a pre-baked image was published by
+    # bake-vm-image.yml (already has build deps + matching kernel-devel
+    # installed), that's used directly instead of installing everything
+    # from scratch on every run.
     name: "Compile ${{ matrix.label }}"
     needs: discover
     if: needs.discover.outputs.has_jobs == 'true'
@@ -61,8 +67,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
 
-      - name: Locate cloud image URL
+      - name: Check for pre-baked VM image
         if: ${{ !matrix.produces_dkms }}
+        id: baked
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="vm-image-${{ matrix.label }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "::notice::Using pre-baked VM image from release '$tag'."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No pre-baked VM image for '$tag'. Installing build deps from scratch (run the 'Bake Lustre build VM images' workflow to speed this up)."
+          fi
+
+      - name: Download pre-baked VM image
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ steps.baked.outputs.tag }}" --pattern '*.qcow2' --clobber
+          mv "baked-${{ matrix.label }}.qcow2" disk.qcow2
+          ls -lh disk.qcow2
+
+      - name: Locate cloud image URL
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
         id: image
         run: |
           set -euo pipefail
@@ -87,7 +118,7 @@ jobs:
           esac
 
       - name: Cache cloud image
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
         uses: actions/cache@v4
         with:
           path: base.qcow2
@@ -95,8 +126,8 @@ jobs:
           # image (i.e. a real update) naturally busts this cache.
           key: cloud-image-${{ steps.image.outputs.url }}
 
-      - name: Download cloud image
-        if: ${{ !matrix.produces_dkms }}
+      - name: Download base cloud image
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
         run: |
           if [ -f base.qcow2 ]; then
             echo "Using cached base.qcow2"
@@ -153,7 +184,7 @@ jobs:
           exit 1
 
       - name: Reboot into the latest kernel
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
         run: |
           ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
           ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
@@ -175,7 +206,25 @@ jobs:
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
             "srpm/${{ matrix.source }}" builder@127.0.0.1:/home/builder/
 
-      - name: Compile Lustre kmod in VM
+      - name: Install build dependencies in VM
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
+          set -euo pipefail
+          sudo dnf -y install dnf-plugins-core
+          sudo dnf config-manager --set-enabled crb || true
+          sudo dnf -y install epel-release
+          sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
+            "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
+            openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static \
+            zlib-devel libyaml-devel libtool dkms \
+            keyutils-libs-devel json-c-devel python3-devel python3-pip \
+            dwarves ncurses-c++-libs ncurses-devel \
+            e2fsprogs-devel libcom_err-devel
+          rpmdev-setuptree
+          REMOTE
+
+      - name: Run rpmbuild in VM
         if: ${{ !matrix.produces_dkms }}
         env:
           RPMBUILD_OPTIONS: ${{ matrix.rpmbuild_options }}
@@ -184,13 +233,6 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
             "RPMBUILD_OPTIONS='${RPMBUILD_OPTIONS}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
           set -euo pipefail
-          sudo dnf -y install dnf-plugins-core
-          sudo dnf config-manager --set-enabled crb || true
-          sudo dnf -y install epel-release
-          sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
-            "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
-            openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static \
-            zlib-devel libyaml-devel libtool dkms
           rpmdev-setuptree
           rpmbuild -tb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$HOME/${SOURCE_NAME}"
           REMOTE

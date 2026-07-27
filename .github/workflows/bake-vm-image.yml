@@ -1,0 +1,196 @@
+name: Bake Lustre build VM images
+
+# Prepares one VM image per non-DKMS compile target (base OS + epel-release +
+# CRB + build deps + kernel-devel/kernel-headers matching the latest kernel,
+# already rebooted into it) and publishes it as a GitHub Release asset. The
+# main build workflow downloads this instead of re-installing the same
+# packages on every single run.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    name: Discover bake targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+      has_jobs: ${{ steps.generate.outputs.has_jobs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - run: pip install pyyaml
+
+      - id: generate
+        run: python3 .github/scripts/generate_matrix.py
+
+  bake:
+    name: "Bake ${{ matrix.label }}"
+    needs: discover
+    if: needs.discover.outputs.has_jobs == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip DKMS-only target (no VM image needed)
+        if: matrix.produces_dkms
+        run: |
+          echo "::notice::${{ matrix.label }} only ships a DKMS package, no compile VM needed, nothing to bake."
+
+      - name: Enable KVM access
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install VM tooling
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
+
+      - name: Locate cloud image URL
+        if: ${{ !matrix.produces_dkms }}
+        id: image
+        run: |
+          set -euo pipefail
+          case "${{ matrix.distribution }}" in
+            AlmaLinux)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
+              file=$(curl -sL "$index" \
+                | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1)
+              if [ -z "$file" ]; then
+                echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image under $index"
+                exit 1
+              fi
+              echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
+              exit 1
+              ;;
+          esac
+
+      - name: Download cloud image
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          echo "Downloading ${{ steps.image.outputs.url }}"
+          curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
+
+      - name: Build cloud-init seed
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          ssh-keygen -t ed25519 -N '' -f vm_key -q
+          cat > user-data <<CLOUDINIT
+          #cloud-config
+          users:
+            - name: builder
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          ssh_pwauth: false
+          CLOUDINIT
+          cat > meta-data <<CLOUDINIT
+          instance-id: lustre-bake-${{ matrix.label }}
+          local-hostname: lustre-bake
+          CLOUDINIT
+          cloud-localds seed.iso user-data meta-data
+
+      - name: Boot VM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          qemu-system-x86_64 \
+            -machine accel=kvm -cpu host -smp 2 -m 4096 \
+            -drive file=disk.qcow2,if=virtio \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -nic user,model=virtio,hostfwd=tcp::2222-:22 \
+            -display none -daemonize \
+            -serial file:console.log \
+            -monitor none
+
+      - name: Wait for SSH
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "SSH is up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM never became reachable over SSH"
+          cat console.log || true
+          exit 1
+
+      - name: Install build dependencies and reboot into the latest kernel
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
+          ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
+          ssh_run 'sudo systemctl reboot' || true
+          sleep 10
+          up=false
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              up=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$up" != "true" ]; then
+            echo "::error::VM did not come back after reboot"
+            exit 1
+          fi
+          ssh_run 'sudo dnf -y install dnf-plugins-core'
+          ssh_run 'sudo dnf config-manager --set-enabled crb' || true
+          ssh_run 'sudo dnf -y install epel-release'
+          ssh_run 'sudo dnf -y install "@Development Tools" rpm-build rpmdevtools rpmrebuild \
+            "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
+            openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static \
+            zlib-devel libyaml-devel libtool dkms \
+            keyutils-libs-devel json-c-devel python3-devel python3-pip \
+            dwarves ncurses-c++-libs ncurses-devel \
+            e2fsprogs-devel libcom_err-devel'
+          ssh_run 'rpmdev-setuptree'
+
+      - name: Shut down VM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true
+          for i in $(seq 1 30); do
+            if ! ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 -o ConnectTimeout=3 builder@127.0.0.1 true 2>/dev/null; then
+              echo "VM is down"
+              break
+            fi
+            sleep 2
+          done
+          sleep 5
+
+      - name: Compress and publish baked image
+        if: ${{ !matrix.produces_dkms }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          qemu-img convert -O qcow2 -c disk.qcow2 "baked-${{ matrix.label }}.qcow2"
+          ls -lh "baked-${{ matrix.label }}.qcow2"
+          tag="vm-image-${{ matrix.label }}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
+            --title "Lustre build VM image: ${{ matrix.label }}" \
+            --notes "Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}) build VM: epel-release + CRB + Development Tools + matching kernel-devel/headers, already rebooted into its latest kernel. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml."
+          gh release upload "$tag" "baked-${{ matrix.label }}.qcow2" --clobber

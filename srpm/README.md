@@ -55,6 +55,23 @@ produces_dkms: true
 rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"
 ```
 
+## VM 이미지 미리 굽기 (bake-vm-image.yml)
+
+`build.yml`이 매번 실행될 때마다 epel-release, CRB, Development Tools,
+kernel-devel 등을 새로 설치하고 재부팅하는 건 낭비이므로, `.github/workflows/bake-vm-image.yml`을
+`workflow_dispatch`로 수동 실행하면 이 준비를 미리 끝낸 VM 이미지를 만들어
+`vm-image-<label>` (예: `vm-image-AlmaLinux9.8_ddn`) GitHub Release 애셋으로
+올려둡니다.
+
+`build.yml`은 실행될 때마다 먼저 해당 release가 있는지 확인해서, 있으면 그
+이미지를 그대로 받아 패키지 설치/재부팅 단계를 건너뛰고 바로 소스 빌드만
+수행합니다. 없으면 기존처럼 처음부터 준비합니다.
+
+빌드 의존성 목록이나 커널이 바뀌어서 이미지를 새로 구워야 하면
+`bake-vm-image.yml`을 다시 실행하면 됩니다(같은 태그에 `--clobber`로 덮어씀).
+GitHub Release 애셋은 파일당 2GiB 제한이 있어서, 이미지가 이 이상 커지면
+저장 방식을 바꿔야 할 수 있습니다.
+
 ## 참고
 
 - `distribution`은 `AlmaLinux`, `Rocky`, `CentOS` 중 하나를 사용합니다(`vars/os_*.yml`
