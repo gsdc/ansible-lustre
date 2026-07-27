@@ -86,11 +86,24 @@ jobs:
               ;;
           esac
 
+      - name: Cache cloud image
+        if: ${{ !matrix.produces_dkms }}
+        uses: actions/cache@v4
+        with:
+          path: base.qcow2
+          # The AlmaLinux filename embeds its build date, so a new dated
+          # image (i.e. a real update) naturally busts this cache.
+          key: cloud-image-${{ steps.image.outputs.url }}
+
       - name: Download cloud image
         if: ${{ !matrix.produces_dkms }}
         run: |
-          echo "Downloading ${{ steps.image.outputs.url }}"
-          curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          if [ -f base.qcow2 ]; then
+            echo "Using cached base.qcow2"
+          else
+            echo "Downloading ${{ steps.image.outputs.url }}"
+            curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          fi
           qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
 
       - name: Build cloud-init seed
@@ -173,6 +186,7 @@ jobs:
           set -euo pipefail
           sudo dnf -y install dnf-plugins-core
           sudo dnf config-manager --set-enabled crb || true
+          sudo dnf -y install epel-release
           sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
             "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
             openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static \
