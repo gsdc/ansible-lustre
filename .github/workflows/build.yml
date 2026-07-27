@@ -1,0 +1,99 @@
+name: Build Lustre client RPMs
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  discover:
+    name: Discover build targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+      has_jobs: ${{ steps.generate.outputs.has_jobs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - run: pip install pyyaml
+
+      - id: generate
+        run: python3 .github/scripts/generate_matrix.py
+
+  compile:
+    name: "Compile ${{ matrix.label }}"
+    needs: discover
+    if: needs.discover.outputs.has_jobs == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip DKMS-only target (no compile needed)
+        if: matrix.produces_dkms
+        run: |
+          echo "::notice::${{ matrix.label }} only ships a DKMS package (from ${{ matrix.source }})."
+          echo "::notice::DKMS rebuilds the kernel module on the target host at install time, so no CI compile is attempted."
+
+      - name: Determine package manager
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            echo "PKG=dnf" >> "$GITHUB_ENV"
+          else
+            echo "PKG=yum" >> "$GITHUB_ENV"
+          fi
+
+      - name: Point EL7 repos at vault.centos.org
+        if: ${{ !matrix.produces_dkms && matrix.distribution == 'CentOS' && startsWith(matrix.version, '7') }}
+        run: |
+          sed -i \
+            -e 's|^mirrorlist=|#mirrorlist=|' \
+            -e 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|' \
+            /etc/yum.repos.d/*.repo
+
+      - name: Enable PowerTools/CRB repo
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          if [ "$PKG" = "dnf" ]; then
+            dnf -y install dnf-plugins-core
+            dnf config-manager --set-enabled powertools 2>/dev/null || true
+            dnf config-manager --set-enabled crb 2>/dev/null || true
+          else
+            yum -y install yum-utils
+            yum-config-manager --enable extras 2>/dev/null || true
+          fi
+
+      - name: Install build dependencies
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          "$PKG" -y install \
+            '@Development Tools' \
+            rpm-build rpmdevtools rpmrebuild \
+            kernel-devel kernel-headers kernel-abi-stablelists kernel-rpm-macros \
+            openssl-devel libmount-devel libnl3-devel \
+            libselinux-devel libselinux-static \
+            zlib-devel libyaml-devel libtool dkms
+
+      - name: Compile Lustre client RPM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          rpmdev-setuptree
+          echo "Building srpm/${{ matrix.source }} with options: ${{ matrix.rpmbuild_options }}"
+          rpmbuild -tb ${{ matrix.rpmbuild_options }} "srpm/${{ matrix.source }}"
+
+      - name: Upload built RPMs
+        if: ${{ !matrix.produces_dkms }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lustre-${{ matrix.label }}
+          path: /github/home/rpmbuild/RPMS/**/*.rpm
+          if-no-files-found: error
