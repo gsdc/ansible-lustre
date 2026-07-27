@@ -2,7 +2,15 @@ name: Build Lustre client RPMs
 
 on:
   push:
+    paths:
+      - 'srpm/**'
+      - '.github/workflows/build.yml'
+      - '.github/scripts/generate_matrix.py'
   pull_request:
+    paths:
+      - 'srpm/**'
+      - '.github/workflows/build.yml'
+      - '.github/scripts/generate_matrix.py'
   workflow_dispatch: {}
 
 permissions:
