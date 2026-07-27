@@ -8,6 +8,28 @@ OS에서 어떻게 빌드해야 하는지 설명하는 "빌드 가이드"(`*.bui
 자동으로 생성합니다. cray/ddn 벤더의 다운로드 URL에 의존하지 않고, 저장소에 커밋된
 소스로 재현 가능하게 빌드하기 위한 목적입니다.
 
+## 실행 트리거: 태그 push
+
+`build.yml`은 브랜치에 커밋을 push해도 돌지 않습니다(VM 부팅 비용이 커서
+아무 push마다 도는 걸 원치 않음). 대신 `<Distribution>_<Version>_<Vendor>_<임의문자열>`
+형식의 태그를 push하면 그 하나의 OS/버전/vendor 조합만 빌드합니다.
+
+```
+git tag AlmaLinux_9.8_ddn_v20260727
+git push origin AlmaLinux_9.8_ddn_v20260727
+```
+
+- 앞 세 개(`Distribution`, `Version`, `Vendor`)만 파싱해서 `srpm/*.build.yml`의
+  target과 매칭합니다(내부 `label` 규칙과 동일하게 `<Distribution><Version>_<Vendor>`).
+  뒤에 붙는 `_v20260727` 같은 부분은 태그를 유니크하게 만들기 위한 임의
+  문자열일 뿐, 파싱에는 쓰이지 않습니다(같은 조합을 재빌드하려면 그냥 날짜/
+  카운터만 바꿔서 새 태그를 push하면 됩니다).
+- `AlmaLinux_*`, `Rocky_*`, `CentOS_*` 패턴의 태그만 이 workflow를 트리거합니다.
+  bake-vm-image.yml이나 build.yml 자신이 만드는 `vm-image-*`/`lustre-*` Release
+  태그와는 이름 규칙이 겹치지 않아서 자기 자신을 재트리거하지 않습니다.
+- 전체 매트릭스를 한 번에 다 돌리고 싶으면 태그 대신 `workflow_dispatch`로
+  수동 실행하면 됩니다.
+
 ## 사용법
 
 소스 tarball 하나당 같은 이름의 빌드 가이드 하나를 짝지어 추가합니다. tarball은
@@ -55,6 +77,27 @@ produces_dkms: true
 rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"
 ```
 
+### Whamcloud 소스 (github.com/lustre/lustre-release)
+
+vendor가 벤더 배포 tarball이 아니라 커뮤니티(Whamcloud) 소스를 그대로 쓰는
+경우, `source`를 tarball 파일명 대신 `github_ref` 매핑으로 지정할 수
+있습니다. 이러면 저장소에 tarball을 커밋할 필요 없이, workflow가 VM 안에서
+`github.com/lustre/lustre-release`를 해당 태그/브랜치로 클론해서
+`autogen.sh` + `configure` + `make dist`로 직접 배포 tarball을 만든 뒤,
+나머지는 일반 tarball 모드와 똑같이 빌드합니다.
+
+```yaml
+source:
+  github_ref: "2.15.6"   # lustre/lustre-release의 태그 또는 브랜치명
+
+targets:
+  - distribution: AlmaLinux
+    version: "9.8"
+    vendor: whamcloud
+
+produces_dkms: false
+```
+
 ## VM 이미지 미리 굽기 (bake-vm-image.yml)
 
 `build.yml`이 매번 실행될 때마다 epel-release, CRB, Development Tools,
@@ -81,13 +124,32 @@ GitHub Release 애셋은 파일당 2GiB 제한이 있어서, 이미지가 이 �
 종속되어 90일 후 만료되는 Artifact와 달리, 이 Release는 삭제하기 전까지 영구
 보관됩니다.
 
+## EOL된 마이너 버전 (vault)
+
+AlmaLinux와 Rocky 둘 다 마이너 버전이 새로 나오면 라이브 미러에서 이전
+마이너의 저장소/클라우드 이미지를 지워버립니다(예: 9.8이 나오면 9.7은
+사라짐). 대신 각자의 vault에 해당 마이너의 저장소와 클라우드 이미지가 그대로
+영구 보관되어 있습니다.
+
+- AlmaLinux: 라이브 `repo.almalinux.org` → vault `vault.almalinux.org/<version>/`
+- Rocky: 라이브 `dl.rockylinux.org/pub/rocky/<major>/` → vault `dl.rockylinux.org/vault/rocky/<version>/`
+
+`build.yml`/`bake-vm-image.yml`의 "Locate cloud image URL" 단계는 먼저 라이브
+미러(현재 최신 마이너)에서 찾고, 없으면 자동으로 각 배포판의 vault로
+폴백합니다. vault 이미지를 쓰게 되면 "Pin repos to vault snapshot" 단계가 VM
+안의 저장소 설정(`/etc/yum.repos.d/almalinux*.repo` 또는 `rocky*.repo`)의
+`baseurl`을 해당 vault 경로로 고정해서, 이후 `dnf install`/`dnf update`가
+롤링 최신이 아니라 정확히 그 마이너 버전의 패키지만 설치하도록 합니다. 이
+고정 없이는 vault 이미지를 부팅해도 기본 저장소 설정이 여전히 롤링 스트림을
+가리켜서 dnf가 최신 버전으로 넘어가버립니다.
+
 ## 참고
 
 - `distribution`은 `AlmaLinux`, `Rocky`, `CentOS` 중 하나를 사용합니다(`vars/os_*.yml`
   파일명 규칙과 동일). 단, `produces_dkms: false`인 target을 실제로 컴파일하려면
   `.github/workflows/build.yml`의 "Locate cloud image URL" 단계에 해당 배포판의
-  공식 GenericCloud 이미지 조회 로직이 있어야 합니다. 현재는 AlmaLinux만
-  구현되어 있고, Rocky/CentOS는 필요해지면 같은 방식으로 추가해야 합니다.
+  공식 GenericCloud 이미지 조회 로직이 있어야 합니다. 현재는 AlmaLinux와
+  Rocky가 구현되어 있고, CentOS는 필요해지면 같은 방식으로 추가해야 합니다.
 - 같은 소스 tarball이 여러 OS/벤더 조합에 쓰인다면 `targets`에 여러 항목을 나열하면
   하나의 가이드로 여러 매트릭스 항목이 생성됩니다.
 - 이 디렉토리는 현재 스캐폴딩만 되어 있는 상태입니다. 실제 `*.tar.gz`와

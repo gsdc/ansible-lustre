@@ -69,15 +69,56 @@ jobs:
             AlmaLinux)
               major="${{ matrix.version }}"
               major="${major%%.*}"
-              index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
-              file=$(curl -sL "$index" \
+              live_index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
+              file=$(curl -sL "$live_index" \
                 | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
                 | sort -V | tail -n1)
-              if [ -z "$file" ]; then
-                echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image under $index"
-                exit 1
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                # ${{ matrix.version }} has been superseded on the live mirror
+                # (AlmaLinux only keeps the current minor there). Fall back to
+                # the frozen vault, which keeps every past minor's repos and
+                # cloud images indefinitely.
+                vault_index="https://vault.almalinux.org/${{ matrix.version }}/cloud/x86_64/images/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image on repo.almalinux.org or vault.almalinux.org"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live AlmaLinux mirror; using the frozen vault.almalinux.org snapshot instead."
               fi
-              echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+              ;;
+            Rocky)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              live_index="https://dl.rockylinux.org/pub/rocky/${major}/images/x86_64/"
+              file=$(curl -sL "$live_index" \
+                | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1)
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                # Rocky also only keeps the current minor's images/repos on
+                # the live mirror; older minors move to the vault.
+                vault_index="https://dl.rockylinux.org/vault/rocky/${{ matrix.version }}/images/x86_64/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find a Rocky ${{ matrix.version }} GenericCloud image on the live mirror or the vault"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live Rocky mirror; using the frozen dl.rockylinux.org/vault snapshot instead."
+              fi
               ;;
             *)
               echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
@@ -138,6 +179,33 @@ jobs:
           cat console.log || true
           exit 1
 
+      - name: Pin repos to vault snapshot
+        if: ${{ !matrix.produces_dkms && steps.image.outputs.vault == 'true' }}
+        env:
+          VAULT_VERSION: ${{ matrix.version }}
+          VAULT_DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "VAULT_VERSION='${VAULT_VERSION}' VAULT_DISTRIBUTION='${VAULT_DISTRIBUTION}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "$VAULT_DISTRIBUTION" in
+            AlmaLinux)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e 's|^metalink=|#metalink=|' \
+                -e "s|^#baseurl=https://repo.almalinux.org/almalinux/\$releasever|baseurl=https://vault.almalinux.org/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/almalinux*.repo
+              ;;
+            Rocky)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e "s|^#baseurl=http://dl.rockylinux.org/\$contentdir/\$releasever|baseurl=https://dl.rockylinux.org/vault/rocky/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/rocky*.repo
+              ;;
+          esac
+          sudo dnf clean all
+          REMOTE
+
       - name: Install build dependencies and reboot into the latest kernel
         if: ${{ !matrix.produces_dkms }}
         run: |
@@ -166,7 +234,8 @@ jobs:
             zlib-devel libyaml-devel libtool dkms \
             keyutils-libs-devel json-c-devel python3-devel python3-pip \
             dwarves ncurses-c++-libs ncurses-devel \
-            e2fsprogs-devel libcom_err-devel'
+            e2fsprogs-devel libcom_err-devel \
+            git autoconf automake pkgconfig'
           ssh_run 'rpmdev-setuptree'
 
       - name: Shut down VM

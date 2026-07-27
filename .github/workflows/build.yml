@@ -1,16 +1,16 @@
 name: Build Lustre client RPMs
 
 on:
+  # Triggered by pushing a tag named <Distribution>_<Version>_<Vendor>_<anything>,
+  # e.g. "AlmaLinux_9.8_ddn_v20260727" - only that one OS/version/vendor target
+  # is built (see the "Parse target from tag" step below), not the whole
+  # matrix. The trailing "_<anything>" segment can be a date, a counter,
+  # whatever's needed to make the tag unique for re-runs; it isn't parsed.
   push:
-    paths:
-      - 'srpm/**'
-      - '.github/workflows/build.yml'
-      - '.github/scripts/generate_matrix.py'
-  pull_request:
-    paths:
-      - 'srpm/**'
-      - '.github/workflows/build.yml'
-      - '.github/scripts/generate_matrix.py'
+    tags:
+      - 'AlmaLinux_*'
+      - 'Rocky_*'
+      - 'CentOS_*'
   workflow_dispatch: {}
 
 permissions:
@@ -32,8 +32,29 @@ jobs:
 
       - run: pip install pyyaml
 
+      - name: Parse target from tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            IFS='_' read -r distribution version vendor _rest <<< "$tag"
+            if [ -z "$distribution" ] || [ -z "$version" ] || [ -z "$vendor" ]; then
+              echo "::error::Tag '$tag' doesn't match <Distribution>_<Version>_<Vendor>_<...> format"
+              exit 1
+            fi
+            echo "::notice::Tag '$tag' -> building only ${distribution} ${version} (${vendor})"
+            echo "filter=${distribution}${version}_${vendor}" >> "$GITHUB_OUTPUT"
+          else
+            echo "filter=" >> "$GITHUB_OUTPUT"
+          fi
+
       - id: generate
-        run: python3 .github/scripts/generate_matrix.py
+        run: |
+          if [ -n "${{ steps.tag.outputs.filter }}" ]; then
+            python3 .github/scripts/generate_matrix.py --filter-label-prefix "${{ steps.tag.outputs.filter }}"
+          else
+            python3 .github/scripts/generate_matrix.py
+          fi
 
   compile:
     # Kernel modules can't be meaningfully built/loaded inside a Docker
@@ -109,15 +130,56 @@ jobs:
             AlmaLinux)
               major="${{ matrix.version }}"
               major="${major%%.*}"
-              index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
-              file=$(curl -sL "$index" \
+              live_index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
+              file=$(curl -sL "$live_index" \
                 | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
                 | sort -V | tail -n1)
-              if [ -z "$file" ]; then
-                echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image under $index"
-                exit 1
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                # ${{ matrix.version }} has been superseded on the live mirror
+                # (AlmaLinux only keeps the current minor there). Fall back to
+                # the frozen vault, which keeps every past minor's repos and
+                # cloud images indefinitely.
+                vault_index="https://vault.almalinux.org/${{ matrix.version }}/cloud/x86_64/images/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image on repo.almalinux.org or vault.almalinux.org"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live AlmaLinux mirror; using the frozen vault.almalinux.org snapshot instead."
               fi
-              echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+              ;;
+            Rocky)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              live_index="https://dl.rockylinux.org/pub/rocky/${major}/images/x86_64/"
+              file=$(curl -sL "$live_index" \
+                | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1)
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                # Rocky also only keeps the current minor's images/repos on
+                # the live mirror; older minors move to the vault.
+                vault_index="https://dl.rockylinux.org/vault/rocky/${{ matrix.version }}/images/x86_64/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find a Rocky ${{ matrix.version }} GenericCloud image on the live mirror or the vault"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live Rocky mirror; using the frozen dl.rockylinux.org/vault snapshot instead."
+              fi
               ;;
             *)
               echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
@@ -191,6 +253,33 @@ jobs:
           cat console.log || true
           exit 1
 
+      - name: Pin repos to vault snapshot
+        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' && steps.image.outputs.vault == 'true' }}
+        env:
+          VAULT_VERSION: ${{ matrix.version }}
+          VAULT_DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "VAULT_VERSION='${VAULT_VERSION}' VAULT_DISTRIBUTION='${VAULT_DISTRIBUTION}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "$VAULT_DISTRIBUTION" in
+            AlmaLinux)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e 's|^metalink=|#metalink=|' \
+                -e "s|^#baseurl=https://repo.almalinux.org/almalinux/\$releasever|baseurl=https://vault.almalinux.org/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/almalinux*.repo
+              ;;
+            Rocky)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e "s|^#baseurl=http://dl.rockylinux.org/\$contentdir/\$releasever|baseurl=https://dl.rockylinux.org/vault/rocky/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/rocky*.repo
+              ;;
+          esac
+          sudo dnf clean all
+          REMOTE
+
       - name: Reboot into the latest kernel
         if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
         run: |
@@ -209,7 +298,7 @@ jobs:
           exit 1
 
       - name: Copy source into VM
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && matrix.source_type == 'tarball' }}
         run: |
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
             "srpm/${{ matrix.source }}" builder@127.0.0.1:/home/builder/
@@ -228,8 +317,36 @@ jobs:
             zlib-devel libyaml-devel libtool dkms \
             keyutils-libs-devel json-c-devel python3-devel python3-pip \
             dwarves ncurses-c++-libs ncurses-devel \
-            e2fsprogs-devel libcom_err-devel
+            e2fsprogs-devel libcom_err-devel \
+            git autoconf automake pkgconfig
           rpmdev-setuptree
+          REMOTE
+
+      # Whamcloud vendor: instead of a tarball committed under srpm/, clone
+      # the official community source straight from github.com/lustre/lustre-release
+      # at the guide's github_ref and package it the same way a vendor would
+      # (autogen.sh + configure + make dist), so the result can feed into the
+      # same generic "Run rpmbuild in VM" step below.
+      - name: Fetch and package Whamcloud source in VM
+        if: ${{ !matrix.produces_dkms && matrix.source_type == 'github' }}
+        env:
+          LUSTRE_REF: ${{ matrix.github_ref }}
+          SOURCE_NAME: ${{ matrix.source }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "LUSTRE_REF='${LUSTRE_REF}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          git clone --branch "$LUSTRE_REF" --depth 1 https://github.com/lustre/lustre-release.git lustre-src
+          cd lustre-src
+          sh autogen.sh
+          ./configure --disable-server
+          make dist
+          dist_tarball=$(find . -maxdepth 1 -name 'lustre-*.tar.gz' | head -n1)
+          if [ -z "$dist_tarball" ]; then
+            echo "::error::'make dist' did not produce a tarball"
+            exit 1
+          fi
+          cp "$dist_tarball" "$HOME/${SOURCE_NAME}"
           REMOTE
 
       - name: Run rpmbuild in VM

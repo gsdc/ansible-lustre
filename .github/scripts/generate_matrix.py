@@ -24,14 +24,32 @@ def load_guide(guide_path):
     with open(guide_path) as f:
         guide = yaml.safe_load(f) or {}
 
-    source_name = guide.get("source")
-    if not source_name:
+    source = guide.get("source")
+    if not source:
         print(f"::error file={guide_path}::'source' key is required", file=sys.stderr)
         sys.exit(1)
 
-    source_path = os.path.join("srpm", source_name)
-    if not os.path.isfile(source_path):
-        print(f"::error file={guide_path}::source file not found: {source_path}", file=sys.stderr)
+    if isinstance(source, str):
+        # Existing mode: a source tarball committed under srpm/.
+        source_path = os.path.join("srpm", source)
+        if not os.path.isfile(source_path):
+            print(f"::error file={guide_path}::source file not found: {source_path}", file=sys.stderr)
+            sys.exit(1)
+        source_type = "tarball"
+        source_name = source
+        github_ref = ""
+    elif isinstance(source, dict) and source.get("github_ref"):
+        # Whamcloud mode: build straight from github.com/lustre/lustre-release
+        # at the given tag/branch, no tarball needs to be committed.
+        github_ref = str(source["github_ref"])
+        source_type = "github"
+        source_name = f"lustre-whamcloud-{github_ref}.tar.gz"
+    else:
+        print(
+            f"::error file={guide_path}::'source' must be a tarball filename (string) "
+            "or a mapping with 'github_ref' (e.g. {{github_ref: 2.15.6}})",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     targets = guide.get("targets") or []
@@ -39,7 +57,7 @@ def load_guide(guide_path):
         print(f"::error file={guide_path}::'targets' must list at least one OS", file=sys.stderr)
         sys.exit(1)
 
-    return guide, source_name, targets
+    return guide, source_name, source_type, github_ref, targets
 
 
 def dedupe_by_label(include):
@@ -59,6 +77,19 @@ def dedupe_by_label(include):
     return deduped
 
 
+def filter_by_label_prefix(include, prefix):
+    """Keep only entries whose label is exactly `prefix` or `prefix_<vendor>`.
+
+    Used when a build is triggered by an OS-targeted tag (e.g.
+    "AlmaLinux_9.8_v20260727") that names a distribution+version but not a
+    vendor, so every vendor variant of that OS/version should still match.
+    """
+    return [
+        entry for entry in include
+        if entry["label"] == prefix or entry["label"].startswith(prefix + "_")
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -66,13 +97,18 @@ def main():
         action="store_true",
         help="Collapse targets that share the same label (distribution+version+vendor) into one entry.",
     )
+    parser.add_argument(
+        "--filter-label-prefix",
+        default=None,
+        help="Only include targets whose label is this distribution+version (e.g. 'AlmaLinux9.8'), any vendor.",
+    )
     args = parser.parse_args()
 
     guides = sorted(glob.glob("srpm/*.build.yml"))
     include = []
 
     for guide_path in guides:
-        guide, source_name, targets = load_guide(guide_path)
+        guide, source_name, source_type, github_ref, targets = load_guide(guide_path)
         produces_dkms = bool(guide.get("produces_dkms", False))
         rpmbuild_options = guide.get("rpmbuild_options", DEFAULT_RPMBUILD_OPTIONS)
 
@@ -83,6 +119,8 @@ def main():
             include.append({
                 "guide": guide_path,
                 "source": source_name,
+                "source_type": source_type,
+                "github_ref": github_ref,
                 "distribution": distribution,
                 "version": version,
                 "vendor": vendor,
@@ -90,6 +128,11 @@ def main():
                 "rpmbuild_options": rpmbuild_options,
                 "label": f"{distribution}{version}_{vendor}".strip("_"),
             })
+
+    if args.filter_label_prefix:
+        before = len(include)
+        include = filter_by_label_prefix(include, args.filter_label_prefix)
+        print(f"Filtered {before} target(s) down to {len(include)} matching label prefix '{args.filter_label_prefix}'.")
 
     if args.dedupe_by_label:
         before = len(include)
