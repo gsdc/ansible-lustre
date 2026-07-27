@@ -242,7 +242,9 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
           set -euo pipefail
-          kmod_rpm=$(find "$HOME/rpmbuild/RPMS" -iname 'kmod-lustre-client*.rpm' -o -iname 'lustre-client-[0-9]*.rpm' | head -n1)
+          kmod_rpm=$(find "$HOME/rpmbuild/RPMS" -type f \
+            \( -iname 'kmod-lustre-client-[0-9]*.rpm' -o -iname 'lustre-client-[0-9]*.rpm' \) \
+            ! -iname '*debuginfo*' ! -iname '*debugsource*' | sort | head -n1)
           if [ -z "$kmod_rpm" ]; then
             echo "::error::No kmod/client rpm found under rpmbuild/RPMS"
             find "$HOME/rpmbuild/RPMS" -type f
