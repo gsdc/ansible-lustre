@@ -121,8 +121,9 @@ jobs:
             -drive file=disk.qcow2,if=virtio \
             -drive file=seed.iso,if=virtio,format=raw \
             -nic user,model=virtio,hostfwd=tcp::2222-:22 \
-            -nographic -daemonize \
-            -serial file:console.log
+            -display none -daemonize \
+            -serial file:console.log \
+            -monitor none
 
       - name: Wait for SSH
         if: ${{ !matrix.produces_dkms }}
