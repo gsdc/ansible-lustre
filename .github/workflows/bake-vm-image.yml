@@ -28,7 +28,7 @@ jobs:
       - run: pip install pyyaml
 
       - id: generate
-        run: python3 .github/scripts/generate_matrix.py
+        run: python3 .github/scripts/generate_matrix.py --dedupe-by-label
 
   bake:
     name: "Bake ${{ matrix.label }}"

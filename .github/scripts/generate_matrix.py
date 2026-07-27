@@ -6,6 +6,7 @@ should be compiled for. Targets whose package is DKMS-based don't need a
 kernel-specific pre-compile (the module is rebuilt on the target host at
 install time), so they're marked to be skipped rather than compiled.
 """
+import argparse
 import glob
 import json
 import os
@@ -41,7 +42,32 @@ def load_guide(guide_path):
     return guide, source_name, targets
 
 
+def dedupe_by_label(include):
+    """Keep only the first entry per label.
+
+    Used for the VM-image bake matrix: the base OS/vendor image doesn't
+    depend on which Lustre source it'll later build, so targeting the same
+    label from multiple build guides should bake it only once.
+    """
+    seen = set()
+    deduped = []
+    for entry in include:
+        if entry["label"] in seen:
+            continue
+        seen.add(entry["label"])
+        deduped.append(entry)
+    return deduped
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dedupe-by-label",
+        action="store_true",
+        help="Collapse targets that share the same label (distribution+version+vendor) into one entry.",
+    )
+    args = parser.parse_args()
+
     guides = sorted(glob.glob("srpm/*.build.yml"))
     include = []
 
@@ -64,6 +90,12 @@ def main():
                 "rpmbuild_options": rpmbuild_options,
                 "label": f"{distribution}{version}_{vendor}".strip("_"),
             })
+
+    if args.dedupe_by_label:
+        before = len(include)
+        include = dedupe_by_label(include)
+        if before != len(include):
+            print(f"Deduped {before} target(s) down to {len(include)} unique label(s).")
 
     matrix = {"include": include}
     has_jobs = "true" if include else "false"
