@@ -25,12 +25,16 @@ jobs:
         run: python3 .github/scripts/generate_matrix.py
 
   compile:
+    # Kernel modules can't be meaningfully built/loaded inside a Docker
+    # container (it shares the runner's kernel). Instead this job boots a
+    # real VM with the target distro's own GenericCloud image over
+    # QEMU/KVM (GitHub-hosted ubuntu-latest runners expose /dev/kvm), so
+    # the compiled kmod-lustre-client is built and modprobe'd against a
+    # genuine matching kernel.
     name: "Compile ${{ matrix.label }}"
     needs: discover
     if: needs.discover.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
-    container:
-      image: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
@@ -43,57 +47,172 @@ jobs:
           echo "::notice::${{ matrix.label }} only ships a DKMS package (from ${{ matrix.source }})."
           echo "::notice::DKMS rebuilds the kernel module on the target host at install time, so no CI compile is attempted."
 
-      - name: Determine package manager
+      - name: Enable KVM access
         if: ${{ !matrix.produces_dkms }}
         run: |
-          if command -v dnf >/dev/null 2>&1; then
-            echo "PKG=dnf" >> "$GITHUB_ENV"
-          else
-            echo "PKG=yum" >> "$GITHUB_ENV"
-          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
 
-      - name: Point EL7 repos at vault.centos.org
-        if: ${{ !matrix.produces_dkms && matrix.distribution == 'CentOS' && startsWith(matrix.version, '7') }}
-        run: |
-          sed -i \
-            -e 's|^mirrorlist=|#mirrorlist=|' \
-            -e 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|' \
-            /etc/yum.repos.d/*.repo
-
-      - name: Enable PowerTools/CRB repo
+      - name: Install VM tooling
         if: ${{ !matrix.produces_dkms }}
         run: |
-          if [ "$PKG" = "dnf" ]; then
-            dnf -y install dnf-plugins-core
-            dnf config-manager --set-enabled powertools 2>/dev/null || true
-            dnf config-manager --set-enabled crb 2>/dev/null || true
-          else
-            yum -y install yum-utils
-            yum-config-manager --enable extras 2>/dev/null || true
-          fi
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
 
-      - name: Install build dependencies
+      - name: Locate cloud image URL
+        if: ${{ !matrix.produces_dkms }}
+        id: image
+        run: |
+          set -euo pipefail
+          case "${{ matrix.distribution }}" in
+            AlmaLinux)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
+              file=$(curl -sL "$index" \
+                | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1)
+              if [ -z "$file" ]; then
+                echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image under $index"
+                exit 1
+              fi
+              echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
+              exit 1
+              ;;
+          esac
+
+      - name: Download cloud image
         if: ${{ !matrix.produces_dkms }}
         run: |
-          "$PKG" -y install \
-            '@Development Tools' \
-            rpm-build rpmdevtools rpmrebuild \
-            kernel-devel kernel-headers kernel-abi-stablelists kernel-rpm-macros \
-            openssl-devel libmount-devel libnl3-devel \
-            libselinux-devel libselinux-static \
+          echo "Downloading ${{ steps.image.outputs.url }}"
+          curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
+
+      - name: Build cloud-init seed
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          ssh-keygen -t ed25519 -N '' -f vm_key -q
+          cat > user-data <<CLOUDINIT
+          #cloud-config
+          users:
+            - name: builder
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          ssh_pwauth: false
+          CLOUDINIT
+          cat > meta-data <<CLOUDINIT
+          instance-id: lustre-build-${{ matrix.label }}
+          local-hostname: lustre-build
+          CLOUDINIT
+          cloud-localds seed.iso user-data meta-data
+
+      - name: Boot VM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          qemu-system-x86_64 \
+            -machine accel=kvm -cpu host -smp 2 -m 4096 \
+            -drive file=disk.qcow2,if=virtio \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -nic user,model=virtio,hostfwd=tcp::2222-:22 \
+            -nographic -daemonize \
+            -serial file:console.log
+
+      - name: Wait for SSH
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "SSH is up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM never became reachable over SSH"
+          cat console.log || true
+          exit 1
+
+      - name: Reboot into the latest kernel
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
+          ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
+          ssh_run 'sudo systemctl reboot' || true
+          sleep 10
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "VM back up after reboot"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM did not come back after reboot"
+          exit 1
+
+      - name: Copy source into VM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
+            "srpm/${{ matrix.source }}" builder@127.0.0.1:/home/builder/
+
+      - name: Compile Lustre kmod in VM
+        if: ${{ !matrix.produces_dkms }}
+        env:
+          RPMBUILD_OPTIONS: ${{ matrix.rpmbuild_options }}
+          SOURCE_NAME: ${{ matrix.source }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "RPMBUILD_OPTIONS='${RPMBUILD_OPTIONS}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          sudo dnf -y install dnf-plugins-core
+          sudo dnf config-manager --set-enabled crb || true
+          sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
+            "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
+            openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static \
             zlib-devel libyaml-devel libtool dkms
+          rpmdev-setuptree
+          rpmbuild -tb ${RPMBUILD_OPTIONS} "$HOME/${SOURCE_NAME}"
+          REMOTE
 
-      - name: Compile Lustre client RPM
+      - name: Install and modprobe the built kmod in VM
         if: ${{ !matrix.produces_dkms }}
         run: |
-          rpmdev-setuptree
-          echo "Building srpm/${{ matrix.source }} with options: ${{ matrix.rpmbuild_options }}"
-          rpmbuild -tb ${{ matrix.rpmbuild_options }} "srpm/${{ matrix.source }}"
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
+          set -euo pipefail
+          kmod_rpm=$(find "$HOME/rpmbuild/RPMS" -iname 'kmod-lustre-client*.rpm' -o -iname 'lustre-client-[0-9]*.rpm' | head -n1)
+          if [ -z "$kmod_rpm" ]; then
+            echo "::error::No kmod/client rpm found under rpmbuild/RPMS"
+            find "$HOME/rpmbuild/RPMS" -type f
+            exit 1
+          fi
+          sudo dnf -y install "$kmod_rpm"
+          sudo depmod -a
+          sudo modprobe lustre
+          lsmod | grep -E 'lustre|lnet|libcfs'
+          REMOTE
+
+      - name: Copy built RPMs out of VM
+        if: ${{ !matrix.produces_dkms }}
+        run: |
+          mkdir -p RPMS
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 -r \
+            builder@127.0.0.1:rpmbuild/RPMS/. RPMS/
 
       - name: Upload built RPMs
         if: ${{ !matrix.produces_dkms }}
         uses: actions/upload-artifact@v4
         with:
           name: lustre-${{ matrix.label }}
-          path: /github/home/rpmbuild/RPMS/**/*.rpm
+          path: RPMS/**/*.rpm
           if-no-files-found: error
+
+      - name: Shut down VM
+        if: always() && !matrix.produces_dkms
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true

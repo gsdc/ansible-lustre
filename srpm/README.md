@@ -45,8 +45,10 @@ targets:
 # 커널 버전에 종속된 사전 컴파일이 필요 없습니다 -> workflow가 이 target의
 # 컴파일 단계를 건너뛰고 "skip" 처리합니다.
 # false면 kmod-lustre-client류(커널 버전 종속 사전 컴파일 바이너리)를 만들어야
-# 한다는 뜻이며, workflow가 lustre.spec 기준으로 rpmbuild -tb를 실행해 컴파일을
-# 시도합니다.
+# 한다는 뜻이며, workflow가 대상 배포판의 공식 GenericCloud 이미지를 QEMU/KVM으로
+# 부팅한 뒤, 그 안에서 lustre.spec 기준으로 rpmbuild -tb를 실행해 컴파일하고
+# modprobe로 커널 모듈 로드까지 검증합니다(컨테이너는 호스트 커널을 공유하므로
+# 커널 모듈 빌드/로드 검증에 쓸 수 없어 VM을 사용합니다).
 produces_dkms: true
 
 # (선택) rpmbuild에 전달할 --with/--without 옵션. 생략하면 아래 기본값을 사용합니다.
@@ -56,7 +58,10 @@ rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-
 ## 참고
 
 - `distribution`은 `AlmaLinux`, `Rocky`, `CentOS` 중 하나를 사용합니다(`vars/os_*.yml`
-  파일명 규칙과 동일).
+  파일명 규칙과 동일). 단, `produces_dkms: false`인 target을 실제로 컴파일하려면
+  `.github/workflows/build.yml`의 "Locate cloud image URL" 단계에 해당 배포판의
+  공식 GenericCloud 이미지 조회 로직이 있어야 합니다. 현재는 AlmaLinux만
+  구현되어 있고, Rocky/CentOS는 필요해지면 같은 방식으로 추가해야 합니다.
 - 같은 소스 tarball이 여러 OS/벤더 조합에 쓰인다면 `targets`에 여러 항목을 나열하면
   하나의 가이드로 여러 매트릭스 항목이 생성됩니다.
 - 이 디렉토리는 현재 스캐폴딩만 되어 있는 상태입니다. 실제 `*.tar.gz`와

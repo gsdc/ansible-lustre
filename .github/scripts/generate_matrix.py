@@ -13,24 +13,10 @@ import sys
 
 import yaml
 
-IMAGE_MAP = {
-    "AlmaLinux": "almalinux",
-    "Rocky": "rockylinux",
-    "CentOS": "centos",
-}
-
 DEFAULT_RPMBUILD_OPTIONS = (
     "--without servers --without zfs --with ldiskfs "
     "--without gss-keyring --without mpi --without o2ib"
 )
-
-
-def image_for(distribution, version):
-    name = IMAGE_MAP.get(distribution)
-    if not name:
-        raise ValueError(f"Unknown distribution: {distribution}")
-    major = version.split(".")[0]
-    return f"{name}:{major}"
 
 
 def load_guide(guide_path):
@@ -74,7 +60,6 @@ def main():
                 "distribution": distribution,
                 "version": version,
                 "vendor": vendor,
-                "image": image_for(distribution, version),
                 "produces_dkms": produces_dkms,
                 "rpmbuild_options": rpmbuild_options,
                 "label": f"{distribution}{version}_{vendor}".strip("_"),
