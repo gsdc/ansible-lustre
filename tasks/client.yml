@@ -48,11 +48,20 @@
     state: present
 - name: Lustre를 패키지 설치
   block:
+    # TODO(임시 우회, 제거 대상): CVE-2026-34180 OpenSSL ASN.1 하드닝 이후
+    # 파이썬 ssl 모듈이 새 에러 코드(ASN1_R_NOT_ENOUGH_DATA)를 인식하지
+    # 못해 인증서 로드가 "[ASN1: NOT_ENOUGH_DATA]"로 실패하는 상위 버그
+    # (python/cpython#151504, ansible/ansible#87251,
+    # rpm-software-management/librepo#380) 때문에, openssl이 패치된
+    # 버전으로 올라간 머신에서 get_url이 실패한다. 다운로드 대상이 이
+    # 저장소 자신의 GitHub Release이므로 임시로 인증서 검증을 건너뛴다.
+    # 파이썬/OpenSSL/ansible 쪽 수정이 배포되면 validate_certs를 제거할 것.
     - name: Lustre 패키지를 GitHub Release에서 다운로드
       get_url:
         url: "https://github.com/gsdc/ansible-lustre/releases/download/{{ lustre_release_tag }}/{{ item }}"
         dest: "/root/{{ item }}"
         mode: "0644"
+        validate_certs: false
       with_items: "{{ _client_packages }}"
       when: lustre_release_tag is defined
       register: lustre_release_download
