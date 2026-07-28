@@ -1,5 +1,8 @@
 ---
-client_packages:
-  - "lustre-client-dkms-2.17.54-1.el9.noarch.rpm"
-  - "lustre-client-2.17.54-1.el9.x86_64.rpm"
+# CI에서 컴파일해 GitHub Release로 게시한 rpm을 사용합니다(로컬 files/ 대신
+# tasks/client.yml이 이 태그의 Release 애셋을 직접 다운로드합니다).
+lustre_release_tag: "lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255"
 
+client_packages:
+  - "kmod-lustre-client-2.14.0_ddn255-1.el9.x86_64.rpm"
+  - "lustre-client-2.14.0_ddn255-1.el9.x86_64.rpm"

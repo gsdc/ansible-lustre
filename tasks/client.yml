@@ -48,11 +48,21 @@
     state: present
 - name: Lustre를 패키지 설치
   block:
+    - name: Lustre 패키지를 GitHub Release에서 다운로드
+      get_url:
+        url: "https://github.com/gsdc/ansible-lustre/releases/download/{{ lustre_release_tag }}/{{ item }}"
+        dest: "/root/{{ item }}"
+        mode: "0644"
+      with_items: "{{ client_packages }}"
+      when: lustre_release_tag is defined
+
     - name: Lustre 패키지를 머신으로 복사
       copy:
         src: "files/{{ ansible_distribution }}{{ ansible_distribution_version}}_{{ lustre_vendor }}/{{ item }}"
         dest: "/root/{{ item }}"
       with_items: "{{ client_packages }}"
+      when: lustre_release_tag is not defined
+
     - name: Install Lustre module
       yum:
         name: "/root/{{ item }}"

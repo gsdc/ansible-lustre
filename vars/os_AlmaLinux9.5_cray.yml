@@ -5,5 +5,4 @@ cray_dkms_url: "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p15
 client_packages:
   - "lustre-client-2.15.7.2_cray_39_g654b360-1.el9.x86_64.rpm"
   - "lustre-client-dkms-2.15.7.2_cray_39_g654b360-1.el9.noarch.rpm"
-  - "lustre-client-iokit-2.15.7.2_cray_39_g654b360-1.el9.x86_64.rpm"
 

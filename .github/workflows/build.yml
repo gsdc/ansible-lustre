@@ -359,6 +359,22 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
             "LUSTRE_REF='${LUSTRE_REF}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
           set -euo pipefail
+          if [ "$LUSTRE_REF" = "latest" ]; then
+            # Lustre release tags look like v2_17_56 (underscores, not dots).
+            # Pick the highest plain "vX_Y_Z" tag, skipping -RC/-beta pre-releases.
+            LUSTRE_REF=$(git ls-remote --tags https://github.com/lustre/lustre-release.git \
+              | grep -oE 'refs/tags/v[0-9]+_[0-9]+_[0-9]+$' \
+              | sed 's|refs/tags/||' \
+              | sed 's/_/./g' \
+              | sort -V \
+              | tail -n1 \
+              | sed 's/\./_/g')
+            if [ -z "$LUSTRE_REF" ]; then
+              echo "::error::Could not resolve 'latest' lustre-release tag"
+              exit 1
+            fi
+            echo "::notice::Resolved whamcloud github_ref 'latest' -> $LUSTRE_REF"
+          fi
           git clone --branch "$LUSTRE_REF" --depth 1 https://github.com/lustre/lustre-release.git lustre-src
           cd lustre-src
           sh autogen.sh
