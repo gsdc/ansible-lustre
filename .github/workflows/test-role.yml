@@ -1,0 +1,265 @@
+name: Test ansible role against released RPMs
+
+on:
+  # Run manually against one or all OS/vendor combinations that have a
+  # vars/os_<Distribution><Version>_<Vendor>.yml file (i.e. every target
+  # build.yml has already published a GitHub Release for).
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Only test this label (e.g. AlmaLinux9.8_cray). Leave empty to test every combination.'
+        type: string
+        default: ''
+
+jobs:
+  discover:
+    name: Discover test targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.generate.outputs.matrix }}
+      has_jobs: ${{ steps.generate.outputs.has_jobs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: generate
+        run: |
+          if [ -n "${{ github.event.inputs.target }}" ]; then
+            python3 .github/scripts/generate_test_matrix.py --filter-label "${{ github.event.inputs.target }}"
+          else
+            python3 .github/scripts/generate_test_matrix.py
+          fi
+
+  test:
+    # Same rationale as build.yml's compile job: a kernel module can't be
+    # meaningfully installed/loaded inside a Docker container, so this boots
+    # a real VM over QEMU/KVM, runs this repo's role against it exactly like
+    # a real consumer playbook would (downloading the GitHub Release rpm for
+    # matrix.label and installing it), and verifies the module actually
+    # modprobes.
+    name: "Test ${{ matrix.test_id }}"
+    needs: discover
+    if: needs.discover.outputs.has_jobs == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install VM tooling and ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
+          pip install --user ansible
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Locate cloud image URL
+        id: image
+        run: |
+          set -euo pipefail
+          case "${{ matrix.distribution }}" in
+            AlmaLinux)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              live_index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
+              file=$(curl -sL "$live_index" \
+                | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1 || true)
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                vault_index="https://vault.almalinux.org/${{ matrix.version }}/cloud/x86_64/images/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1 || true)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image on repo.almalinux.org or vault.almalinux.org"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live AlmaLinux mirror; using the frozen vault.almalinux.org snapshot instead."
+              fi
+              ;;
+            Rocky)
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              live_index="https://dl.rockylinux.org/pub/rocky/${major}/images/x86_64/"
+              file=$(curl -sL "$live_index" \
+                | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                | sort -V | tail -n1 || true)
+              if [ -n "$file" ]; then
+                echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=false" >> "$GITHUB_OUTPUT"
+              else
+                vault_index="https://dl.rockylinux.org/vault/rocky/${{ matrix.version }}/images/x86_64/"
+                file=$(curl -sL "$vault_index" \
+                  | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
+                  | sort -V | tail -n1 || true)
+                if [ -z "$file" ]; then
+                  echo "::error::Could not find a Rocky ${{ matrix.version }} GenericCloud image on the live mirror or the vault"
+                  exit 1
+                fi
+                echo "url=${vault_index}${file}" >> "$GITHUB_OUTPUT"
+                echo "vault=true" >> "$GITHUB_OUTPUT"
+                echo "::notice::${{ matrix.version }} is no longer on the live Rocky mirror; using the frozen dl.rockylinux.org/vault snapshot instead."
+              fi
+              ;;
+            *)
+              echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
+              exit 1
+              ;;
+          esac
+
+      - name: Cache cloud image
+        uses: actions/cache@v4
+        with:
+          path: base.qcow2
+          key: cloud-image-${{ steps.image.outputs.url }}
+
+      - name: Download base cloud image
+        run: |
+          if [ -f base.qcow2 ]; then
+            echo "Using cached base.qcow2"
+          else
+            echo "Downloading ${{ steps.image.outputs.url }}"
+            curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          fi
+          qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
+
+      - name: Build cloud-init seed
+        run: |
+          ssh-keygen -t ed25519 -N '' -f vm_key -q
+          cat > user-data <<CLOUDINIT
+          #cloud-config
+          users:
+            - name: builder
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          ssh_pwauth: false
+          CLOUDINIT
+          cat > meta-data <<CLOUDINIT
+          instance-id: lustre-test-${{ matrix.test_id }}
+          local-hostname: lustre-test
+          CLOUDINIT
+          cloud-localds seed.iso user-data meta-data
+
+      - name: Boot VM
+        run: |
+          qemu-system-x86_64 \
+            -machine accel=kvm -cpu host -smp 2 -m 4096 \
+            -drive file=disk.qcow2,if=virtio \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -nic user,model=virtio,hostfwd=tcp::2222-:22 \
+            -display none -daemonize \
+            -serial file:console.log \
+            -monitor none
+
+      - name: Wait for SSH
+        run: |
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "SSH is up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM never became reachable over SSH"
+          cat console.log || true
+          exit 1
+
+      - name: Pin repos to vault snapshot
+        if: ${{ steps.image.outputs.vault == 'true' }}
+        env:
+          VAULT_VERSION: ${{ matrix.version }}
+          VAULT_DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "VAULT_VERSION='${VAULT_VERSION}' VAULT_DISTRIBUTION='${VAULT_DISTRIBUTION}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "$VAULT_DISTRIBUTION" in
+            AlmaLinux)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e 's|^metalink=|#metalink=|' \
+                -e "s|^#[[:space:]]*baseurl=https://repo.almalinux.org/almalinux/\$releasever|baseurl=https://vault.almalinux.org/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/almalinux*.repo
+              ;;
+            Rocky)
+              sudo sed -i \
+                -e 's|^mirrorlist=|#mirrorlist=|' \
+                -e "s|^#baseurl=http://dl.rockylinux.org/\$contentdir/\$releasever|baseurl=https://dl.rockylinux.org/vault/rocky/${VAULT_VERSION}|" \
+                /etc/yum.repos.d/rocky*.repo
+              ;;
+          esac
+          sudo dnf clean all
+          REMOTE
+
+      # A kmod-lustre-client rpm is pinned to the kernel version that was
+      # running in the CI build VM (build.yml also does "dnf update kernel"
+      # right before compiling). Matching that here - and rebooting into it -
+      # is exactly the "먼저 최신 커널로 업그레이드 후 설치" step the README
+      # recommends for real deployments, so this test exercises the real
+      # documented flow rather than a best-case coincidence.
+      - name: Update to the latest kernel and reboot
+        run: |
+          ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
+          ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
+          ssh_run 'sudo systemctl reboot' || true
+          sleep 10
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "VM back up after reboot"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM did not come back after reboot"
+          exit 1
+
+      - name: Install ansible.utils collection
+        run: ansible-galaxy collection install ansible.utils
+
+      - name: Build ansible inventory
+        run: |
+          cat > inventory.ini <<INV
+          [vm]
+          127.0.0.1 ansible_port=2222 ansible_user=builder ansible_ssh_private_key_file=${{ github.workspace }}/vm_key ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+          INV
+
+      - name: Run ansible-playbook against the VM
+        env:
+          ANSIBLE_ROLES_PATH: ${{ github.workspace }}/..
+        run: |
+          ansible-playbook -i inventory.ini .github/scripts/ci-test-playbook.yml \
+            -e "lustre_vendor=${{ matrix.vendor }}" \
+            -e "lustre_dkms=${{ matrix.dkms }}" \
+            -e "lustre_network=10.0.2.0/24"
+
+      - name: Verify the lustre module loaded in the VM
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
+          set -euo pipefail
+          echo "--- installed lustre-related packages ---"
+          rpm -qa | grep -i lustre
+          echo "--- loaded kernel modules ---"
+          sudo modprobe lustre
+          lsmod | grep -E 'lustre|lnet|libcfs'
+          echo "--- /etc/modprobe.d/lustre.conf ---"
+          cat /etc/modprobe.d/lustre.conf
+          REMOTE
+
+      - name: Shut down VM
+        if: always()
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true

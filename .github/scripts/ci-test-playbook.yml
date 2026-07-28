@@ -1,0 +1,8 @@
+---
+# Applies this repo's role (checked out under $GITHUB_WORKSPACE, added to
+# ANSIBLE_ROLES_PATH by test-role.yml under its own basename) to the booted
+# VM, exactly like a real consumer's playbook would.
+- hosts: all
+  become: true
+  roles:
+    - role: ansible-lustre
