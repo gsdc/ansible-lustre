@@ -9,6 +9,7 @@ on:
   push:
     tags:
       - 'AlmaLinux_*'
+      - 'Alma_*'
       - 'Rocky_*'
       - 'CentOS_*'
   workflow_dispatch: {}
@@ -42,6 +43,10 @@ jobs:
               echo "::error::Tag '$tag' doesn't match <Distribution>_<Version>_<Vendor>_<...> format"
               exit 1
             fi
+            # Accept short aliases for distribution names in the tag.
+            case "$distribution" in
+              Alma) distribution="AlmaLinux" ;;
+            esac
             echo "::notice::Tag '$tag' -> building only ${distribution} ${version} (${vendor})"
             echo "filter=${distribution}${version}_${vendor}" >> "$GITHUB_OUTPUT"
           else

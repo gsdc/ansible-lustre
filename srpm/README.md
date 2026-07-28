@@ -24,9 +24,11 @@ git push origin AlmaLinux_9.8_ddn_v20260727
   뒤에 붙는 `_v20260727` 같은 부분은 태그를 유니크하게 만들기 위한 임의
   문자열일 뿐, 파싱에는 쓰이지 않습니다(같은 조합을 재빌드하려면 그냥 날짜/
   카운터만 바꿔서 새 태그를 push하면 됩니다).
-- `AlmaLinux_*`, `Rocky_*`, `CentOS_*` 패턴의 태그만 이 workflow를 트리거합니다.
-  bake-vm-image.yml이나 build.yml 자신이 만드는 `vm-image-*`/`lustre-*` Release
-  태그와는 이름 규칙이 겹치지 않아서 자기 자신을 재트리거하지 않습니다.
+- `AlmaLinux_*`, `Alma_*`, `Rocky_*`, `CentOS_*` 패턴의 태그만 이 workflow를
+  트리거합니다. `Alma_*`는 `AlmaLinux_*`의 짧은 별칭이고(`Alma` -> `AlmaLinux`로
+  자동 변환), bake-vm-image.yml이나 build.yml 자신이 만드는 `vm-image-*`/
+  `lustre-*` Release 태그와는 이름 규칙이 겹치지 않아서 자기 자신을
+  재트리거하지 않습니다.
 - 전체 매트릭스를 한 번에 다 돌리고 싶으면 태그 대신 `workflow_dispatch`로
   수동 실행하면 됩니다.
 
