@@ -532,6 +532,17 @@ jobs:
             --notes "Compiled from srpm/${SOURCE_NAME} for ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}). Built and modprobe-verified against a real kernel by .github/workflows/build.yml."
           gh release upload "$tag" "${rpm_files[@]}" --clobber
 
+          # Only the latest source's release should survive per label: remove
+          # any other "lustre-<label>-*" release left over from a previous
+          # (now superseded) source version.
+          gh release list --json tagName --jq '.[].tagName' \
+            | grep "^lustre-${{ matrix.label }}-" \
+            | grep -v -x "$tag" \
+            | while read -r old_tag; do
+                echo "::notice::Removing superseded release '$old_tag' (replaced by '$tag')"
+                gh release delete "$old_tag" --yes --cleanup-tag
+              done
+
       - name: Shut down VM
         if: always() && !matrix.produces_dkms
         run: |

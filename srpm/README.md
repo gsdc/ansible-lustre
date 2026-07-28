@@ -164,11 +164,18 @@ VM 준비(패키지 설치, 재부팅)는 어떤 Lustre 소스를 빌드하든 �
 ## 컴파일된 RPM 배포 (GitHub Release)
 
 `produces_dkms: false`인 target이 실제로 컴파일에 성공하면(모듈 로드 검증까지
-통과하면), 결과 rpm 전체를 `lustre-<label>-<source-tarball-이름>` (예:
-`lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255`) 태그의 GitHub Release로도
-올립니다. 같은 태그로 다시 빌드하면 애셋을 덮어씁니다(`--clobber`). CI run에
-종속되어 90일 후 만료되는 Artifact와 달리, 이 Release는 삭제하기 전까지 영구
-보관됩니다.
+통과하면), 결과 rpm 전체(kmod 계열 + DKMS rpm 포함)를
+`lustre-<label>-<source-이름>` (예: `lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255`)
+태그의 GitHub Release로도 올립니다. 같은 태그로 다시 빌드하면 애셋을
+덮어씁니다(`--clobber`). CI run에 종속되어 90일 후 만료되는 Artifact와 달리,
+이 Release는 삭제하기 전까지 영구 보관됩니다.
+
+같은 label로 시작하지만 태그가 다른(= 소스가 새 버전으로 바뀐) 예전 release는
+새 release를 올린 직후 자동으로 삭제됩니다. 즉 한 label당 항상 최신 소스로
+빌드한 release 하나만 남습니다(예: `srpm/*.build.yml`의 `source`가
+`lustre-2.14.0_ddn255.tar.gz`에서 `lustre-2.14.1_ddn256.tar.gz`로 바뀌면,
+다음 빌드 성공 시 `lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255` release는
+자동으로 지워지고 `...lustre-2.14.1_ddn256` release만 남음).
 
 ## EOL된 마이너 버전 (vault)
 
