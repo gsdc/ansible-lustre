@@ -215,7 +215,7 @@ jobs:
               sudo sed -i \
                 -e 's|^mirrorlist=|#mirrorlist=|' \
                 -e 's|^metalink=|#metalink=|' \
-                -e "s|^#baseurl=https://repo.almalinux.org/almalinux/\$releasever|baseurl=https://vault.almalinux.org/${VAULT_VERSION}|" \
+                -e "s|^#[[:space:]]*baseurl=https://repo.almalinux.org/almalinux/\$releasever|baseurl=https://vault.almalinux.org/${VAULT_VERSION}|" \
                 /etc/yum.repos.d/almalinux*.repo
               ;;
             Rocky)
