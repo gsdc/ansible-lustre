@@ -55,6 +55,10 @@
         mode: "0644"
       with_items: "{{ _client_packages }}"
       when: lustre_release_tag is defined
+      register: lustre_release_download
+      until: lustre_release_download is succeeded
+      retries: 3
+      delay: 5
 
     - name: Lustre 패키지를 머신으로 복사
       copy:
