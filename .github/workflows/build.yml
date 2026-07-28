@@ -470,7 +470,7 @@ jobs:
 
           (cd "$srctree" && make dkms-rpm)
 
-          dkms_rpm=$(find "$srctree" -maxdepth 1 -iname '*dkms*.rpm' | head -n1)
+          dkms_rpm=$(find "$srctree" -maxdepth 1 -iname '*dkms*.rpm' ! -iname '*.src.rpm' | sort | head -n1)
           if [ -z "$dkms_rpm" ]; then
             echo "::error::'make dkms-rpm' did not produce a DKMS rpm"
             exit 1
