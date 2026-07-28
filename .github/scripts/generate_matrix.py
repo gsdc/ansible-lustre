@@ -93,6 +93,11 @@ def dedupe_by_os_key(include):
     return deduped
 
 
+def filter_by_os_key(include, os_key):
+    """Keep only entries whose os_key (distribution+version) matches exactly."""
+    return [entry for entry in include if entry["os_key"] == os_key]
+
+
 def filter_by_label_prefix(include, prefix):
     """Keep only entries whose label is exactly `prefix` or `prefix_<vendor>`.
 
@@ -117,6 +122,11 @@ def main():
         "--filter-label-prefix",
         default=None,
         help="Only include targets whose label is this distribution+version (e.g. 'AlmaLinux9.8'), any vendor.",
+    )
+    parser.add_argument(
+        "--filter-os-key",
+        default=None,
+        help="Only include targets whose os_key (distribution+version, e.g. 'Rocky9.7') matches exactly.",
     )
     args = parser.parse_args()
 
@@ -151,6 +161,11 @@ def main():
         before = len(include)
         include = filter_by_label_prefix(include, args.filter_label_prefix)
         print(f"Filtered {before} target(s) down to {len(include)} matching label prefix '{args.filter_label_prefix}'.")
+
+    if args.filter_os_key:
+        before = len(include)
+        include = filter_by_os_key(include, args.filter_os_key)
+        print(f"Filtered {before} target(s) down to {len(include)} matching os_key '{args.filter_os_key}'.")
 
     if args.dedupe_by_os:
         before = len(include)

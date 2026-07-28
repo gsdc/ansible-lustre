@@ -156,6 +156,11 @@ VM 준비(패키지 설치, 재부팅)는 어떤 Lustre 소스를 빌드하든 �
 (같은 태그에 `--clobber`로 덮어씀). GitHub Release 애셋은 파일당 2GiB
 제한이 있어서, 이미지가 이 이상 커지면 저장 방식을 바꿔야 할 수 있습니다.
 
+`workflow_dispatch`의 `os_key` 입력(예: `Rocky9.7`)을 채우면 그 OS 하나만
+대상으로 discover/bake가 돕니다. 비워두면 지금까지처럼 전체 OS를 대상으로
+하되(이미 있는 release는 알아서 skip), `force: true`와 같이 쓰면 특정 OS
+하나만 강제로 다시 구울 수 있습니다.
+
 ## 컴파일된 RPM 배포 (GitHub Release)
 
 `produces_dkms: false`인 target이 실제로 컴파일에 성공하면(모듈 로드 검증까지

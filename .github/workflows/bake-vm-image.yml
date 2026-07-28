@@ -8,6 +8,10 @@ name: Bake Lustre build VM images
 on:
   workflow_dispatch:
     inputs:
+      os_key:
+        description: 'Only bake this OS (distribution+version, e.g. "Rocky9.7"). Leave empty to consider every target (existing ones are still skipped unless force=true).'
+        type: string
+        default: ''
       force:
         description: 'Rebake targets even if a vm-image-<os_key> release already exists'
         type: boolean
@@ -33,7 +37,12 @@ jobs:
       - run: pip install pyyaml
 
       - id: generate
-        run: python3 .github/scripts/generate_matrix.py --dedupe-by-os
+        run: |
+          if [ -n "${{ github.event.inputs.os_key }}" ]; then
+            python3 .github/scripts/generate_matrix.py --dedupe-by-os --filter-os-key "${{ github.event.inputs.os_key }}"
+          else
+            python3 .github/scripts/generate_matrix.py --dedupe-by-os
+          fi
 
   bake:
     name: "Bake ${{ matrix.os_key }}"
