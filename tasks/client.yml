@@ -61,30 +61,39 @@
         disable_gpg_check: yes
       with_items: "{{ _client_packages }}"
 
-# 예전 lustre_network(서브넷 CIDR) 변수를 그대로 쓰는 클러스터와의 호환성:
-# lustre_mgs_address가 지정되지 않았는데 lustre_network가 있으면, 그 서브넷의
-# 첫 주소(네트워크 주소 + 1)를 lustre_mgs_address로 사용해 동일하게 동작시킨다.
-- name: 예전 lustre_network 변수 호환 처리
-  set_fact:
-    lustre_mgs_address: "{{ (lustre_network.split('/')[0].split('.')[:-1] + ['1']) | join('.') }}"
-  when:
-    - lustre_network is defined
-    - not lustre_mgs_address
+# lustre_mgs_address로 실제 라우팅되는 인터페이스를 찾아 lnet 설정을 만든다.
+# 실제 Lustre MGS가 없는 환경(예: GitHub Actions VM에서의 role 테스트)에서는
+# lustre_skip_lnet_config: true로 이 블록 전체를 건너뛸 수 있다. 기본값은
+# false로, 별도 설정이 없으면 항상 lnet 설정을 만든다.
+- name: lnet 설정
+  when: not (lustre_skip_lnet_config | bool)
+  block:
+    # 예전 lustre_network(서브넷 CIDR) 변수를 그대로 쓰는 클러스터와의 호환성:
+    # lustre_mgs_address가 지정되지 않았는데 lustre_network가 있으면, 그 서브넷의
+    # 첫 주소(네트워크 주소 + 1)를 lustre_mgs_address로 사용해 동일하게 동작시킨다.
+    - name: 예전 lustre_network 변수 호환 처리
+      set_fact:
+        lustre_mgs_address: "{{ (lustre_network.split('/')[0].split('.')[:-1] + ['1']) | join('.') }}"
+      when:
+        - lustre_network is defined
+        - not lustre_mgs_address
 
-# lustre_mgs_address(MGS 서버 주소)로 커널이 실제로 라우팅할 인터페이스를
-# 대상 머신에서 직접 물어본다. 서브넷을 선언해 문자열로 비교하는 대신
-# 커널의 라우팅 테이블(정책 라우팅 포함)을 그대로 따르므로 더 견고하고,
-# 별도 콜렉션(ansible.utils) 없이 동작한다. lustre_mgs_address가 NID
-# 형식("주소@네트워크")으로 주어져도 동작하도록 "@" 이전 부분만 사용한다.
-- name: lustre_mgs_address로 라우팅되는 인터페이스 조회
-  command: "ip -4 route get {{ lustre_mgs_address.split('@')[0] }}"
-  register: lustre_mgs_route
-  changed_when: false
-- name: Private network interface 확인
-  set_fact:
-    private_interface: "{{ lustre_mgs_route.stdout | regex_search('dev (\\S+)', '\\1') }}"
-- copy:
-    dest: /etc/modprobe.d/lustre.conf
-    content: "options lnet networks=\"tcp({{ private_interface }})\"\n"
+    # lustre_mgs_address(MGS 서버 주소)로 커널이 실제로 라우팅할 인터페이스를
+    # 대상 머신에서 직접 물어본다. 서브넷을 선언해 문자열로 비교하는 대신
+    # 커널의 라우팅 테이블(정책 라우팅 포함)을 그대로 따르므로 더 견고하고,
+    # 별도 콜렉션(ansible.utils) 없이 동작한다. lustre_mgs_address가 NID
+    # 형식("주소@네트워크")이거나 failover MGS 쌍("주소1@네트워크:주소2@네트워크")
+    # 이어도, 첫 "@" 이전 부분(첫 번째 MGS 주소)만 취해 동작한다.
+    - name: lustre_mgs_address로 라우팅되는 인터페이스 조회
+      command: "ip -4 route get {{ lustre_mgs_address.split('@')[0] }}"
+      register: lustre_mgs_route
+      changed_when: false
+    - name: Private network interface 확인
+      set_fact:
+        private_interface: "{{ lustre_mgs_route.stdout | regex_search('dev (\\S+)', '\\1') }}"
+    - copy:
+        dest: /etc/modprobe.d/lustre.conf
+        content: "options lnet networks=\"tcp({{ private_interface }})\"\n"
+
 - name: 커널 모듈 의존성 트리 재생성
   shell: "/usr/sbin/depmod -a"

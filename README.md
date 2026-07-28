@@ -15,9 +15,10 @@ Role Variables
 * `lustre_vendor`: `"cray"`[default] | `"ddn"` | `"whamcloud"` — `vars/os_<Distribution><Version>_<Vendor>.yml`
   파일을 고르는 데 사용됩니다.
 * `lustre_mgs_address`: Lustre MGS(관리 서버) 주소. 예) `192.168.1.10` (NID 형식
-  `192.168.1.10@tcp0`도 허용됩니다). 이 주소로 실제 라우팅되는 인터페이스를
-  `ip route get`으로 확인해 LNet 네트워크(`/etc/modprobe.d/lustre.conf`)로
-  사용하므로 반드시 지정해야 합니다.
+  `192.168.1.10@tcp0`도 허용되고, failover MGS 쌍 `192.168.3.211@tcp:192.168.3.212@tcp`
+  처럼 주어져도 첫 번째 MGS 주소만 사용해 동작합니다). 이 주소로 실제
+  라우팅되는 인터페이스를 `ip route get`으로 확인해 LNet 네트워크
+  (`/etc/modprobe.d/lustre.conf`)로 사용하므로 반드시 지정해야 합니다.
   * (호환용) 예전 `lustre_network`(서브넷 CIDR, 예: `192.168.0.0/16`) 변수를
     쓰던 클러스터는 `lustre_mgs_address`를 지정하지 않으면 그 서브넷의 첫
     주소(네트워크 주소 + 1)가 자동으로 사용됩니다.
@@ -25,6 +26,10 @@ Role Variables
   (`client_packages`) 대신, 대상 `os_*.yml`에 정의된 DKMS 패키지 목록
   (`client_packages_dkms`)을 설치합니다. 대상 조합에 `client_packages_dkms`가
   정의되어 있어야 동작합니다.
+* `lustre_skip_lnet_config`: `false`[default] — `true`로 설정하면 lnet 설정
+  (인터페이스 탐지 + `/etc/modprobe.d/lustre.conf` 작성)을 건너뜁니다. 실제
+  Lustre MGS가 없는 환경(예: role 자체만 검증하는 CI VM)에서만 사용하고,
+  실제 배포에서는 기본값(`false`)을 유지하세요.
 
 패키지 설치 방식
 ----------------

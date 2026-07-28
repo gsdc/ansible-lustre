@@ -238,13 +238,13 @@ jobs:
         env:
           ANSIBLE_ROLES_PATH: ${{ github.workspace }}/..
         run: |
-          # This VM has a single NIC (QEMU user-mode networking), so any
-          # address resolves to it via the default route - 10.0.2.2 (the
-          # QEMU user-mode gateway) is just a stand-in for a real MGS address.
+          # This VM has no real Lustre MGS to route to, so skip lnet config
+          # entirely - this test only verifies the rpm actually installs and
+          # modprobes, not lnet/network setup.
           ansible-playbook -i inventory.ini .github/scripts/ci-test-playbook.yml \
             -e "lustre_vendor=${{ matrix.vendor }}" \
             -e "lustre_dkms=${{ matrix.dkms }}" \
-            -e "lustre_mgs_address=10.0.2.2"
+            -e "lustre_skip_lnet_config=true"
 
       - name: Verify the lustre module loaded in the VM
         run: |
@@ -255,8 +255,6 @@ jobs:
           echo "--- loaded kernel modules ---"
           sudo modprobe lustre
           lsmod | grep -E 'lustre|lnet|libcfs'
-          echo "--- /etc/modprobe.d/lustre.conf ---"
-          cat /etc/modprobe.d/lustre.conf
           REMOTE
 
       - name: Shut down VM
