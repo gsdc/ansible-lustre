@@ -227,9 +227,6 @@ jobs:
           echo "::error::VM did not come back after reboot"
           exit 1
 
-      - name: Install ansible.utils collection
-        run: ansible-galaxy collection install ansible.utils
-
       - name: Build ansible inventory
         run: |
           cat > inventory.ini <<INV
@@ -241,10 +238,13 @@ jobs:
         env:
           ANSIBLE_ROLES_PATH: ${{ github.workspace }}/..
         run: |
+          # This VM has a single NIC (QEMU user-mode networking), so any
+          # address resolves to it via the default route - 10.0.2.2 (the
+          # QEMU user-mode gateway) is just a stand-in for a real MGS address.
           ansible-playbook -i inventory.ini .github/scripts/ci-test-playbook.yml \
             -e "lustre_vendor=${{ matrix.vendor }}" \
             -e "lustre_dkms=${{ matrix.dkms }}" \
-            -e "lustre_network=10.0.2.0/24"
+            -e "lustre_mgs_address=10.0.2.2"
 
       - name: Verify the lustre module loaded in the VM
         run: |

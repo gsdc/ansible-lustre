@@ -23,12 +23,6 @@
       state: installed
     when:
         - (ansible_distribution_major_version == "8") or (ansible_distribution_major_version == "9")
-  - name: Install ansible-collection-ansible-utils for Almalinux9
-    dnf:
-      name: ansible-collection-ansible-utils
-      state: installed
-    when:
-        - ansible_distribution_major_version == "9"
   - include_vars:
       file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}_{{ lustre_vendor }}.yml"
   - name: Install Development Packages to compile lustre module

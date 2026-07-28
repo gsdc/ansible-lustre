@@ -14,7 +14,13 @@ Role Variables
 * `type`: Client or Server [ 현재 "client"만 지원 ]
 * `lustre_vendor`: `"cray"`[default] | `"ddn"` | `"whamcloud"` — `vars/os_<Distribution><Version>_<Vendor>.yml`
   파일을 고르는 데 사용됩니다.
-* `lustre_network`: Lustre 스토리지와 연결될 때 사용하는 네트워크 주소. 예) `10.0.0.0/8`
+* `lustre_mgs_address`: Lustre MGS(관리 서버) 주소. 예) `192.168.1.10` (NID 형식
+  `192.168.1.10@tcp0`도 허용됩니다). 이 주소로 실제 라우팅되는 인터페이스를
+  `ip route get`으로 확인해 LNet 네트워크(`/etc/modprobe.d/lustre.conf`)로
+  사용하므로 반드시 지정해야 합니다.
+  * (호환용) 예전 `lustre_network`(서브넷 CIDR, 예: `192.168.0.0/16`) 변수를
+    쓰던 클러스터는 `lustre_mgs_address`를 지정하지 않으면 그 서브넷의 첫
+    주소(네트워크 주소 + 1)가 자동으로 사용됩니다.
 * `lustre_dkms`: `false`[default] — `true`로 설정하면 커널 버전에 종속된 kmod 패키지
   (`client_packages`) 대신, 대상 `os_*.yml`에 정의된 DKMS 패키지 목록
   (`client_packages_dkms`)을 설치합니다. 대상 조합에 `client_packages_dkms`가
@@ -65,7 +71,7 @@ Including an example of how to use your role (for instance, with variables passe
   roles:
     - role: gsdc.lustre
       lustre_vendor: "cray"
-      lustre_network: "192.168.0.0/16"
+      lustre_mgs_address: "192.168.1.10"
       # lustre_dkms: true   # 필요하면 커널 버전 종속 kmod 대신 DKMS 패키지 사용
   become: yes
 ```

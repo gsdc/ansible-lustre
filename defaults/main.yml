@@ -1,7 +1,9 @@
 ---
 # defaults file for ansible-lustre
 type: client
-lustre_network: "192.168.0.0/16"
+## Lustre MGS(관리 서버) 주소. 이 주소로 실제 라우팅되는 인터페이스를
+## LNet 네트워크로 사용하므로 반드시 지정해야 합니다. 예) "192.168.1.10"
+lustre_mgs_address: ""
 ## lustre_vendor: "cray" | "ddn" | "whamcloud"
 lustre_vendor: "cray"
 ## true면 커널 버전 종속 kmod 패키지 대신 client_packages_dkms에 정의된
