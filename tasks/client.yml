@@ -30,6 +30,9 @@
       - (ansible_distribution_major_version == "7")
 - include_vars:
     file: "os_{{ ansible_facts['distribution'] }}{{ ansible_facts['distribution_version'] }}_{{ lustre_vendor }}.yml"
+- name: dkms_only일 때 client_packages_dkms 사용, 아니면 client_packages 사용
+  set_fact:
+    _client_packages: "{{ client_packages_dkms if (dkms_only | bool) else client_packages }}"
 - name: Install Development Packages to compile lustre module
   package: 
     name: 
@@ -53,14 +56,14 @@
         url: "https://github.com/gsdc/ansible-lustre/releases/download/{{ lustre_release_tag }}/{{ item }}"
         dest: "/root/{{ item }}"
         mode: "0644"
-      with_items: "{{ client_packages }}"
+      with_items: "{{ _client_packages }}"
       when: lustre_release_tag is defined
 
     - name: Lustre 패키지를 머신으로 복사
       copy:
         src: "files/{{ ansible_distribution }}{{ ansible_distribution_version}}_{{ lustre_vendor }}/{{ item }}"
         dest: "/root/{{ item }}"
-      with_items: "{{ client_packages }}"
+      with_items: "{{ _client_packages }}"
       when: lustre_release_tag is not defined
 
     - name: Install Lustre module
@@ -68,7 +71,7 @@
         name: "/root/{{ item }}"
         state: present
         disable_gpg_check: yes
-      with_items: "{{ client_packages }}"
+      with_items: "{{ _client_packages }}"
 
 - name: Find Private network interfarce
   set_fact:

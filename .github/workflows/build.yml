@@ -424,6 +424,61 @@ jobs:
           fi
           REMOTE
 
+      # Alongside the kernel-specific kmod build above, also build the
+      # portable lustre-client-dkms rpm from the same source (via the
+      # `make dkms-rpm` target, which generates lustre-dkms.spec through the
+      # same ./configure substitution as lustre.spec) and publish both to the
+      # same release. The ansible role's `dkms_only` mode installs this one
+      # instead of the kernel-specific kmod package.
+      - name: Build DKMS rpm in VM
+        if: ${{ !matrix.produces_dkms }}
+        env:
+          SOURCE_NAME: ${{ matrix.source_type == 'github' && steps.whamcloud.outputs.source_name || matrix.source }}
+          SOURCE_TYPE: ${{ matrix.source_type }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "SOURCE_NAME='${SOURCE_NAME}' SOURCE_TYPE='${SOURCE_TYPE}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          case "$SOURCE_TYPE" in
+            github)
+              # Already extracted and ./configure'd by the Whamcloud fetch step.
+              srctree="$HOME/lustre-src"
+              ;;
+            srpm_zip)
+              inner_tarball=$(find "$HOME/rpmbuild/SOURCES" -maxdepth 1 -name '*.tar.gz' | head -n1)
+              if [ -z "$inner_tarball" ]; then
+                echo "::error::No source tarball found under rpmbuild/SOURCES to build the DKMS rpm from"
+                exit 1
+              fi
+              mkdir -p "$HOME/dkms-src"
+              tar xzf "$inner_tarball" -C "$HOME/dkms-src"
+              srctree=$(find "$HOME/dkms-src" -mindepth 1 -maxdepth 1 -type d | head -n1)
+              (cd "$srctree" && ./configure --disable-server)
+              ;;
+            *)
+              mkdir -p "$HOME/dkms-src"
+              tar xzf "$HOME/${SOURCE_NAME}" -C "$HOME/dkms-src"
+              srctree=$(find "$HOME/dkms-src" -mindepth 1 -maxdepth 1 -type d | head -n1)
+              (cd "$srctree" && ./configure --disable-server)
+              ;;
+          esac
+
+          if [ -z "${srctree:-}" ] || [ ! -d "$srctree" ]; then
+            echo "::error::Could not locate the extracted source tree to build the DKMS rpm"
+            exit 1
+          fi
+
+          (cd "$srctree" && make dkms-rpm)
+
+          dkms_rpm=$(find "$srctree" -maxdepth 1 -iname '*dkms*.rpm' | head -n1)
+          if [ -z "$dkms_rpm" ]; then
+            echo "::error::'make dkms-rpm' did not produce a DKMS rpm"
+            exit 1
+          fi
+          mkdir -p "$HOME/rpmbuild/RPMS/noarch"
+          cp "$dkms_rpm" "$HOME/rpmbuild/RPMS/noarch/"
+          REMOTE
+
       - name: Install and modprobe the built kmod in VM
         if: ${{ !matrix.produces_dkms }}
         run: |

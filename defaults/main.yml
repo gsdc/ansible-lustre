@@ -4,3 +4,6 @@ type: client
 lustre_network: "192.168.0.0/16"
 ## lustre_vendor: "cray" | "ddn" | "whamcloud"
 lustre_vendor: "cray"
+## true면 커널 버전 종속 kmod 패키지 대신 client_packages_dkms에 정의된
+## DKMS 패키지를 설치합니다(대상 os_*.yml에 client_packages_dkms가 있어야 함).
+dkms_only: false
