@@ -1,8 +1,0 @@
----
-cray_kmod_url: "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p1552383989/v279747/lustre-cray-2.15.B24.g654b36.zip"
-cray_dkms_url: "https://downloads.hpe.com/pub/softlib2/software1/pubsw-linux/p1552383989/v279747/2.15.7.2_cray_39_g654b360_x86_64_dkms.tgz"
-
-client_packages:
-  - "lustre-client-2.15.7.2_cray_39_g654b360-1.el9.x86_64.rpm"
-  - "lustre-client-dkms-2.15.7.2_cray_39_g654b360-1.el9.noarch.rpm"
-
