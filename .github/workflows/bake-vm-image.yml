@@ -235,7 +235,7 @@ jobs:
             keyutils-libs-devel json-c-devel python3-devel python3-pip \
             dwarves ncurses-c++-libs ncurses-devel \
             e2fsprogs-devel libcom_err-devel \
-            git autoconf automake pkgconfig'
+            git autoconf automake pkgconfig unzip'
           ssh_run 'rpmdev-setuptree'
 
       - name: Shut down VM

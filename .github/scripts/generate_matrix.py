@@ -29,6 +29,8 @@ def load_guide(guide_path):
         print(f"::error file={guide_path}::'source' key is required", file=sys.stderr)
         sys.exit(1)
 
+    srpm_path_in_zip = ""
+
     if isinstance(source, str):
         # Existing mode: a source tarball committed under srpm/.
         source_path = os.path.join("srpm", source)
@@ -44,10 +46,22 @@ def load_guide(guide_path):
         github_ref = str(source["github_ref"])
         source_type = "github"
         source_name = f"lustre-whamcloud-{github_ref}.tar.gz"
+    elif isinstance(source, dict) and source.get("zip") and source.get("srpm_path"):
+        # Vendor .src.rpm shipped inside a zip archive (e.g. Cray/HPE releases).
+        zip_name = source["zip"]
+        zip_path = os.path.join("srpm", zip_name)
+        if not os.path.isfile(zip_path):
+            print(f"::error file={guide_path}::zip file not found: {zip_path}", file=sys.stderr)
+            sys.exit(1)
+        source_type = "srpm_zip"
+        source_name = zip_name
+        github_ref = ""
+        srpm_path_in_zip = str(source["srpm_path"])
     else:
         print(
-            f"::error file={guide_path}::'source' must be a tarball filename (string) "
-            "or a mapping with 'github_ref' (e.g. {{github_ref: 2.15.6}})",
+            f"::error file={guide_path}::'source' must be a tarball filename (string), "
+            "a mapping with 'github_ref' (e.g. {{github_ref: 2.15.6}}), or a mapping with "
+            "'zip'/'srpm_path' (e.g. {{zip: foo.zip, srpm_path: rpmbuild/foo.src.rpm}})",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -57,7 +71,7 @@ def load_guide(guide_path):
         print(f"::error file={guide_path}::'targets' must list at least one OS", file=sys.stderr)
         sys.exit(1)
 
-    return guide, source_name, source_type, github_ref, targets
+    return guide, source_name, source_type, github_ref, srpm_path_in_zip, targets
 
 
 def dedupe_by_label(include):
@@ -108,7 +122,7 @@ def main():
     include = []
 
     for guide_path in guides:
-        guide, source_name, source_type, github_ref, targets = load_guide(guide_path)
+        guide, source_name, source_type, github_ref, srpm_path_in_zip, targets = load_guide(guide_path)
         produces_dkms = bool(guide.get("produces_dkms", False))
         rpmbuild_options = guide.get("rpmbuild_options", DEFAULT_RPMBUILD_OPTIONS)
 
@@ -121,6 +135,7 @@ def main():
                 "source": source_name,
                 "source_type": source_type,
                 "github_ref": github_ref,
+                "srpm_path_in_zip": srpm_path_in_zip,
                 "distribution": distribution,
                 "version": version,
                 "vendor": vendor,

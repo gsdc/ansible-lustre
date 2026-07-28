@@ -303,7 +303,7 @@ jobs:
           exit 1
 
       - name: Copy source into VM
-        if: ${{ !matrix.produces_dkms && matrix.source_type == 'tarball' }}
+        if: ${{ !matrix.produces_dkms && (matrix.source_type == 'tarball' || matrix.source_type == 'srpm_zip') }}
         run: |
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
             "srpm/${{ matrix.source }}" builder@127.0.0.1:/home/builder/
@@ -323,8 +323,26 @@ jobs:
             keyutils-libs-devel json-c-devel python3-devel python3-pip \
             dwarves ncurses-c++-libs ncurses-devel \
             e2fsprogs-devel libcom_err-devel \
-            git autoconf automake pkgconfig
+            git autoconf automake pkgconfig unzip
           rpmdev-setuptree
+          REMOTE
+
+      # Vendor .src.rpm shipped inside a zip (e.g. Cray/HPE releases): unpack
+      # the zip and install the srpm, which populates ~/rpmbuild/SPECS +
+      # SOURCES the same way it would on a real build host.
+      - name: Unpack srpm from zip in VM
+        if: ${{ !matrix.produces_dkms && matrix.source_type == 'srpm_zip' }}
+        env:
+          SOURCE_NAME: ${{ matrix.source }}
+          SRPM_PATH_IN_ZIP: ${{ matrix.srpm_path_in_zip }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "SOURCE_NAME='${SOURCE_NAME}' SRPM_PATH_IN_ZIP='${SRPM_PATH_IN_ZIP}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          rpmdev-setuptree
+          mkdir -p "$HOME/srpm-zip"
+          unzip -o "$HOME/${SOURCE_NAME}" -d "$HOME/srpm-zip"
+          rpm -ivh --nosignature "$HOME/srpm-zip/${SRPM_PATH_IN_ZIP}"
           REMOTE
 
       # Whamcloud vendor: instead of a tarball committed under srpm/, clone
@@ -359,12 +377,22 @@ jobs:
         env:
           RPMBUILD_OPTIONS: ${{ matrix.rpmbuild_options }}
           SOURCE_NAME: ${{ matrix.source }}
+          SOURCE_TYPE: ${{ matrix.source_type }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
-            "RPMBUILD_OPTIONS='${RPMBUILD_OPTIONS}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
+            "RPMBUILD_OPTIONS='${RPMBUILD_OPTIONS}' SOURCE_NAME='${SOURCE_NAME}' SOURCE_TYPE='${SOURCE_TYPE}' bash -s" <<'REMOTE'
           set -euo pipefail
           rpmdev-setuptree
-          rpmbuild -tb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$HOME/${SOURCE_NAME}"
+          if [ "$SOURCE_TYPE" = "srpm_zip" ]; then
+            spec=$(find "$HOME/rpmbuild/SPECS" -maxdepth 1 -name '*.spec' | head -n1)
+            if [ -z "$spec" ]; then
+              echo "::error::No .spec file found under rpmbuild/SPECS after installing the srpm"
+              exit 1
+            fi
+            rpmbuild -bb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$spec"
+          else
+            rpmbuild -tb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$HOME/${SOURCE_NAME}"
+          fi
           REMOTE
 
       - name: Install and modprobe the built kmod in VM

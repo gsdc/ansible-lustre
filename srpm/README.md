@@ -100,6 +100,38 @@ targets:
 produces_dkms: false
 ```
 
+### zip 안에 srpm이 들어있는 벤더 배포본 (예: Cray/HPE)
+
+Cray/HPE처럼 `make dist` tarball이 아니라 `.src.rpm`을 zip으로 묶어서 배포하는
+경우, `source`를 `zip`/`srpm_path` 매핑으로 지정합니다. `srpm_path`는 zip 안에서
+그 `.src.rpm` 파일까지의 경로입니다(zip 최상위가 아니라 하위 디렉토리에
+들어있는 경우가 많아서 직접 명시하게 되어 있습니다). workflow는 VM 안에서
+zip을 풀고 `rpm -ivh`로 srpm을 설치한 뒤(=`~/rpmbuild/SPECS`에 spec이 풀림),
+그 spec으로 `rpmbuild -bb`를 실행합니다(tarball 모드의 `rpmbuild -tb`와
+다름).
+
+```yaml
+source:
+  zip: lustre-cray-2.15.B25.g41d214.zip
+  srpm_path: rpmbuild/lustre-2.15.8.1_cray_33_g41d2144-1.src.rpm
+
+targets:
+  - distribution: AlmaLinux
+    version: "9.7"
+    vendor: cray
+  - distribution: AlmaLinux
+    version: "9.8"
+    vendor: cray
+  - distribution: Rocky
+    version: "9.7"
+    vendor: cray
+  - distribution: Rocky
+    version: "9.8"
+    vendor: cray
+
+produces_dkms: false
+```
+
 ## VM 이미지 미리 굽기 (bake-vm-image.yml)
 
 `build.yml`이 매번 실행될 때마다 epel-release, CRB, Development Tools,

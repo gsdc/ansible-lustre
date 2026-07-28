@@ -1,0 +1,22 @@
+source:
+  zip: lustre-cray-2.15.B25.g41d214.zip
+  srpm_path: rpmbuild/lustre-2.15.8.1_cray_33_g41d2144-1.src.rpm
+
+targets:
+  - distribution: AlmaLinux
+    version: "9.7"
+    vendor: cray
+  - distribution: AlmaLinux
+    version: "9.8"
+    vendor: cray
+  - distribution: Rocky
+    version: "9.7"
+    vendor: cray
+  - distribution: Rocky
+    version: "9.8"
+    vendor: cray
+
+# kmod-lustre-client(커널 버전 종속 사전 컴파일 바이너리) 빌드를 시도합니다.
+produces_dkms: false
+
+rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"
