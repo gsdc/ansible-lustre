@@ -6,7 +6,12 @@ name: Bake Lustre build VM images
 # main build workflow downloads this instead of re-installing the same
 # packages on every single run.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebake targets even if a vm-image-<os_key> release already exists'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,10 +33,10 @@ jobs:
       - run: pip install pyyaml
 
       - id: generate
-        run: python3 .github/scripts/generate_matrix.py --dedupe-by-label
+        run: python3 .github/scripts/generate_matrix.py --dedupe-by-os
 
   bake:
-    name: "Bake ${{ matrix.label }}"
+    name: "Bake ${{ matrix.os_key }}"
     needs: discover
     if: needs.discover.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
@@ -41,13 +46,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check for existing baked image
+        if: ${{ !matrix.produces_dkms }}
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="vm-image-${{ matrix.os_key }}"
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::force=true, rebaking ${{ matrix.os_key }} even though a release may already exist."
+          elif gh release view "$tag" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::vm-image-${{ matrix.os_key }} already exists, skipping bake. Re-run this workflow with force=true to rebuild it."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Skip DKMS-only target (no VM image needed)
         if: matrix.produces_dkms
         run: |
-          echo "::notice::${{ matrix.label }} only ships a DKMS package, no compile VM needed, nothing to bake."
+          echo "::notice::${{ matrix.os_key }} only ships a DKMS package, no compile VM needed, nothing to bake."
 
       - name: Enable KVM access
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -55,13 +77,13 @@ jobs:
           ls -l /dev/kvm
 
       - name: Install VM tooling
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
 
       - name: Locate cloud image URL
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         id: image
         run: |
           set -euo pipefail
@@ -127,14 +149,14 @@ jobs:
           esac
 
       - name: Download cloud image
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           echo "Downloading ${{ steps.image.outputs.url }}"
           curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
           qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
 
       - name: Build cloud-init seed
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           ssh-keygen -t ed25519 -N '' -f vm_key -q
           cat > user-data <<CLOUDINIT
@@ -148,13 +170,13 @@ jobs:
           ssh_pwauth: false
           CLOUDINIT
           cat > meta-data <<CLOUDINIT
-          instance-id: lustre-bake-${{ matrix.label }}
+          instance-id: lustre-bake-${{ matrix.os_key }}
           local-hostname: lustre-bake
           CLOUDINIT
           cloud-localds seed.iso user-data meta-data
 
       - name: Boot VM
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           qemu-system-x86_64 \
             -machine accel=kvm -cpu host -smp 2 -m 4096 \
@@ -166,7 +188,7 @@ jobs:
             -monitor none
 
       - name: Wait for SSH
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           for i in $(seq 1 60); do
             if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
@@ -180,7 +202,7 @@ jobs:
           exit 1
 
       - name: Pin repos to vault snapshot
-        if: ${{ !matrix.produces_dkms && steps.image.outputs.vault == 'true' }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' && steps.image.outputs.vault == 'true' }}
         env:
           VAULT_VERSION: ${{ matrix.version }}
           VAULT_DISTRIBUTION: ${{ matrix.distribution }}
@@ -207,7 +229,7 @@ jobs:
           REMOTE
 
       - name: Install build dependencies and reboot into the latest kernel
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
           ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
@@ -239,7 +261,7 @@ jobs:
           ssh_run 'rpmdev-setuptree'
 
       - name: Shut down VM
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true
           for i in $(seq 1 30); do
@@ -252,14 +274,14 @@ jobs:
           sleep 5
 
       - name: Compress and publish baked image
-        if: ${{ !matrix.produces_dkms }}
+        if: ${{ !matrix.produces_dkms && steps.existing.outputs.exists != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          qemu-img convert -O qcow2 -c disk.qcow2 "baked-${{ matrix.label }}.qcow2"
-          ls -lh "baked-${{ matrix.label }}.qcow2"
-          tag="vm-image-${{ matrix.label }}"
+          qemu-img convert -O qcow2 -c disk.qcow2 "baked-${{ matrix.os_key }}.qcow2"
+          ls -lh "baked-${{ matrix.os_key }}.qcow2"
+          tag="vm-image-${{ matrix.os_key }}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
-            --title "Lustre build VM image: ${{ matrix.label }}" \
+            --title "Lustre build VM image: ${{ matrix.os_key }}" \
             --notes "Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}) build VM: epel-release + CRB + Development Tools + matching kernel-devel/headers, already rebooted into its latest kernel. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml."
-          gh release upload "$tag" "baked-${{ matrix.label }}.qcow2" --clobber
+          gh release upload "$tag" "baked-${{ matrix.os_key }}.qcow2" --clobber

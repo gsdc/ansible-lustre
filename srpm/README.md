@@ -137,17 +137,24 @@ produces_dkms: false
 `build.yml`이 매번 실행될 때마다 epel-release, CRB, Development Tools,
 kernel-devel 등을 새로 설치하고 재부팅하는 건 낭비이므로, `.github/workflows/bake-vm-image.yml`을
 `workflow_dispatch`로 수동 실행하면 이 준비를 미리 끝낸 VM 이미지를 만들어
-`vm-image-<label>` (예: `vm-image-AlmaLinux9.8_ddn`) GitHub Release 애셋으로
-올려둡니다.
+`vm-image-<os_key>` (예: `vm-image-AlmaLinux9.8`, vendor 제외) GitHub Release
+애셋으로 올려둡니다.
+
+이 이미지는 `distribution+version` 단위로만 구분됩니다(vendor는 뺌). 베이스
+VM 준비(패키지 설치, 재부팅)는 어떤 Lustre 소스를 빌드하든 동일하기 때문에,
+`AlmaLinux9.8_ddn`/`AlmaLinux9.8_cray`/`AlmaLinux9.8_whamcloud`처럼 vendor만
+다른 target들은 이미지 하나(`vm-image-AlmaLinux9.8`)를 공유합니다
+(`generate_matrix.py --dedupe-by-os`).
 
 `build.yml`은 실행될 때마다 먼저 해당 release가 있는지 확인해서, 있으면 그
 이미지를 그대로 받아 패키지 설치/재부팅 단계를 건너뛰고 바로 소스 빌드만
 수행합니다. 없으면 기존처럼 처음부터 준비합니다.
 
-빌드 의존성 목록이나 커널이 바뀌어서 이미지를 새로 구워야 하면
-`bake-vm-image.yml`을 다시 실행하면 됩니다(같은 태그에 `--clobber`로 덮어씀).
-GitHub Release 애셋은 파일당 2GiB 제한이 있어서, 이미지가 이 이상 커지면
-저장 방식을 바꿔야 할 수 있습니다.
+`bake-vm-image.yml`은 이미 `vm-image-<os_key>` release가 있으면 기본적으로
+다시 굽지 않고 건너뜁니다. 빌드 의존성 목록이나 커널이 바뀌어서 강제로 다시
+구워야 하면, `workflow_dispatch` 실행 시 `force: true` 입력을 주면 됩니다
+(같은 태그에 `--clobber`로 덮어씀). GitHub Release 애셋은 파일당 2GiB
+제한이 있어서, 이미지가 이 이상 커지면 저장 방식을 바꿔야 할 수 있습니다.
 
 ## 컴파일된 RPM 배포 (GitHub Release)
 

@@ -107,7 +107,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="vm-image-${{ matrix.label }}"
+          tag="vm-image-${{ matrix.os_key }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -123,7 +123,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download "${{ steps.baked.outputs.tag }}" --pattern '*.qcow2' --clobber
-          mv "baked-${{ matrix.label }}.qcow2" disk.qcow2
+          mv "baked-${{ matrix.os_key }}.qcow2" disk.qcow2
           ls -lh disk.qcow2
 
       - name: Locate cloud image URL

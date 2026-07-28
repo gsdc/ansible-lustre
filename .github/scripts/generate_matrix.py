@@ -74,19 +74,21 @@ def load_guide(guide_path):
     return guide, source_name, source_type, github_ref, srpm_path_in_zip, targets
 
 
-def dedupe_by_label(include):
-    """Keep only the first entry per label.
+def dedupe_by_os_key(include):
+    """Keep only the first entry per os_key (distribution+version, no vendor).
 
-    Used for the VM-image bake matrix: the base OS/vendor image doesn't
-    depend on which Lustre source it'll later build, so targeting the same
-    label from multiple build guides should bake it only once.
+    Used for the VM-image bake matrix: the base OS image (packages,
+    kernel-devel, reboot) is identical regardless of vendor - only the
+    Lustre source built on top of it differs - so AlmaLinux9.8_ddn,
+    AlmaLinux9.8_cray and AlmaLinux9.8_whamcloud should all share one baked
+    image instead of each getting their own.
     """
     seen = set()
     deduped = []
     for entry in include:
-        if entry["label"] in seen:
+        if entry["os_key"] in seen:
             continue
-        seen.add(entry["label"])
+        seen.add(entry["os_key"])
         deduped.append(entry)
     return deduped
 
@@ -107,9 +109,9 @@ def filter_by_label_prefix(include, prefix):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--dedupe-by-label",
+        "--dedupe-by-os",
         action="store_true",
-        help="Collapse targets that share the same label (distribution+version+vendor) into one entry.",
+        help="Collapse targets that share the same distribution+version (any vendor) into one entry.",
     )
     parser.add_argument(
         "--filter-label-prefix",
@@ -142,6 +144,7 @@ def main():
                 "produces_dkms": produces_dkms,
                 "rpmbuild_options": rpmbuild_options,
                 "label": f"{distribution}{version}_{vendor}".strip("_"),
+                "os_key": f"{distribution}{version}",
             })
 
     if args.filter_label_prefix:
@@ -149,11 +152,11 @@ def main():
         include = filter_by_label_prefix(include, args.filter_label_prefix)
         print(f"Filtered {before} target(s) down to {len(include)} matching label prefix '{args.filter_label_prefix}'.")
 
-    if args.dedupe_by_label:
+    if args.dedupe_by_os:
         before = len(include)
-        include = dedupe_by_label(include)
+        include = dedupe_by_os_key(include)
         if before != len(include):
-            print(f"Deduped {before} target(s) down to {len(include)} unique label(s).")
+            print(f"Deduped {before} target(s) down to {len(include)} unique OS/version(s).")
 
     matrix = {"include": include}
     has_jobs = "true" if include else "false"
