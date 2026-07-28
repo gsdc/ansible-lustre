@@ -6,3 +6,8 @@ lustre_release_tag: "lustre-Rocky9.7_cray-lustre-cray-2.15.B25.g41d214.zip"
 client_packages:
   - "kmod-lustre-client-2.15.8.1_cray_33_g41d2144-1.el9.x86_64.rpm"
   - "lustre-client-2.15.8.1_cray_33_g41d2144-1.el9.x86_64.rpm"
+
+# lustre_dkms: true일 때 client_packages 대신 이 목록을 설치합니다.
+client_packages_dkms:
+  - "lustre-client-dkms-2.15.8.1_cray_33_g41d2144-1.el9.noarch.rpm"
+  - "lustre-client-2.15.8.1_cray_33_g41d2144-1.el9.x86_64.rpm"

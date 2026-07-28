@@ -1,0 +1,15 @@
+---
+# CI에서 컴파일해 GitHub Release로 게시한 rpm을 사용합니다(로컬 files/ 대신
+# tasks/client.yml이 이 태그의 Release 애셋을 직접 다운로드합니다).
+# whamcloud는 lustre/lustre-release의 최신 태그를 추적하므로, 최신 태그가
+# 갱신되면 이 lustre_release_tag와 아래 패키지 버전도 함께 갱신해야 합니다.
+lustre_release_tag: "lustre-AlmaLinux9.8_whamcloud-lustre-whamcloud-latest"
+
+client_packages:
+  - "kmod-lustre-client-2.17.56-1.el9.x86_64.rpm"
+  - "lustre-client-2.17.56-1.el9.x86_64.rpm"
+
+# lustre_dkms: true일 때 client_packages 대신 이 목록을 설치합니다.
+client_packages_dkms:
+  - "lustre-client-dkms-2.17.56-1.el9.noarch.rpm"
+  - "lustre-client-2.17.56-1.el9.x86_64.rpm"
