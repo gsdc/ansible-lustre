@@ -7,7 +7,4 @@ targets:
     version: "9.8"
     vendor: ddn
 
-# kmod-lustre-client(커널 버전 종속 사전 컴파일 바이너리) 빌드를 시도합니다.
-produces_dkms: false
-
 rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"

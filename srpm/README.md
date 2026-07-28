@@ -24,13 +24,24 @@ git push origin AlmaLinux_9.8_ddn_v20260727
   뒤에 붙는 `_v20260727` 같은 부분은 태그를 유니크하게 만들기 위한 임의
   문자열일 뿐, 파싱에는 쓰이지 않습니다(같은 조합을 재빌드하려면 그냥 날짜/
   카운터만 바꿔서 새 태그를 push하면 됩니다).
-- `AlmaLinux_*`, `Alma_*`, `Rocky_*`, `CentOS_*` 패턴의 태그만 이 workflow를
+- `AlmaLinux_*`, `Alma_*`, `Rocky_*` 패턴의 태그만 이 workflow를
   트리거합니다. `Alma_*`는 `AlmaLinux_*`의 짧은 별칭이고(`Alma` -> `AlmaLinux`로
   자동 변환), bake-vm-image.yml이나 build.yml 자신이 만드는 `vm-image-*`/
   `lustre-*` Release 태그와는 이름 규칙이 겹치지 않아서 자기 자신을
   재트리거하지 않습니다.
-- 전체 매트릭스를 한 번에 다 돌리고 싶으면 태그 대신 `workflow_dispatch`로
-  수동 실행하면 됩니다.
+- 태그 대신 `workflow_dispatch`를 수동 실행해도 됩니다(`distribution`/`version`/
+  `vendor` 입력으로 특정 조합만 지정 가능, 태그를 지우고 다시 만드는 과정이
+  필요 없음). 예:
+  ```bash
+  # 특정 조합 하나만
+  gh workflow run build.yml -f distribution=AlmaLinux -f version=9.7 -f vendor=cray
+
+  # distribution+version만 지정 (해당 버전의 모든 vendor)
+  gh workflow run build.yml -f distribution=Rocky -f version=9.8
+
+  # 아무 입력 없이 전체 매트릭스
+  gh workflow run build.yml
+  ```
 
 ## 사용법
 
@@ -64,20 +75,17 @@ targets:
     version: "9.7"
     vendor: cray
 
-# true면 해당 target에는 lustre-client-dkms류(DKMS) 패키지만 있으면 된다는 뜻입니다.
-# DKMS 패키지는 설치 시점에 대상 호스트에서 커널 모듈을 다시 빌드하므로,
-# 커널 버전에 종속된 사전 컴파일이 필요 없습니다 -> workflow가 이 target의
-# 컴파일 단계를 건너뛰고 "skip" 처리합니다.
-# false면 kmod-lustre-client류(커널 버전 종속 사전 컴파일 바이너리)를 만들어야
-# 한다는 뜻이며, workflow가 대상 배포판의 공식 GenericCloud 이미지를 QEMU/KVM으로
-# 부팅한 뒤, 그 안에서 lustre.spec 기준으로 rpmbuild -tb를 실행해 컴파일하고
-# modprobe로 커널 모듈 로드까지 검증합니다(컨테이너는 호스트 커널을 공유하므로
-# 커널 모듈 빌드/로드 검증에 쓸 수 없어 VM을 사용합니다).
-produces_dkms: true
-
 # (선택) rpmbuild에 전달할 --with/--without 옵션. 생략하면 아래 기본값을 사용합니다.
 rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"
 ```
+
+모든 target은 항상 커널 버전 종속 kmod 패키지(`rpmbuild -tb`/`-bb`)와 이식성
+있는 DKMS 패키지(`make dkms-rpm`)를 **둘 다** 컴파일하고, 결과 rpm 전부를
+같은 Release에 올립니다(컨테이너는 호스트 커널을 공유하므로 커널 모듈
+빌드/로드 검증에 쓸 수 없어 대상 배포판의 공식 GenericCloud 이미지를
+QEMU/KVM으로 부팅해서 진행하고, `modprobe`로 로드까지 검증합니다). 둘 중
+어느 걸 실제로 설치할지는 ansible role의 `lustre_dkms` 변수가 고릅니다
+(자세한 내용은 최상위 `README.md` 참고).
 
 ### Whamcloud 소스 (github.com/lustre/lustre-release)
 
@@ -96,8 +104,6 @@ targets:
   - distribution: AlmaLinux
     version: "9.8"
     vendor: whamcloud
-
-produces_dkms: false
 ```
 
 ### zip 안에 srpm이 들어있는 벤더 배포본 (예: Cray/HPE)
@@ -128,8 +134,6 @@ targets:
   - distribution: Rocky
     version: "9.8"
     vendor: cray
-
-produces_dkms: false
 ```
 
 ## VM 이미지 미리 굽기 (bake-vm-image.yml)
@@ -161,9 +165,20 @@ VM 준비(패키지 설치, 재부팅)는 어떤 Lustre 소스를 빌드하든 �
 하되(이미 있는 release는 알아서 skip), `force: true`와 같이 쓰면 특정 OS
 하나만 강제로 다시 구울 수 있습니다.
 
+```bash
+# 특정 OS 하나만 (이미 있으면 skip)
+gh workflow run bake-vm-image.yml -f os_key=Rocky9.7
+
+# 특정 OS 하나만 강제로 다시 굽기
+gh workflow run bake-vm-image.yml -f os_key=Rocky9.7 -f force=true
+
+# 전체 OS 대상(이미 있는 건 skip)
+gh workflow run bake-vm-image.yml
+```
+
 ## 컴파일된 RPM 배포 (GitHub Release)
 
-`produces_dkms: false`인 target이 실제로 컴파일에 성공하면(모듈 로드 검증까지
+target이 실제로 컴파일에 성공하면(모듈 로드 검증까지
 통과하면), 결과 rpm 전체(kmod 계열 + DKMS rpm 포함)를
 `lustre-<label>-<source-이름>` (예: `lustre-AlmaLinux9.8_ddn-lustre-2.14.0_ddn255`)
 태그의 GitHub Release로도 올립니다. 같은 태그로 다시 빌드하면 애셋을
@@ -198,11 +213,10 @@ AlmaLinux와 Rocky 둘 다 마이너 버전이 새로 나오면 라이브 미러
 
 ## 참고
 
-- `distribution`은 `AlmaLinux`, `Rocky`, `CentOS` 중 하나를 사용합니다(`vars/os_*.yml`
-  파일명 규칙과 동일). 단, `produces_dkms: false`인 target을 실제로 컴파일하려면
-  `.github/workflows/build.yml`의 "Locate cloud image URL" 단계에 해당 배포판의
-  공식 GenericCloud 이미지 조회 로직이 있어야 합니다. 현재는 AlmaLinux와
-  Rocky가 구현되어 있고, CentOS는 필요해지면 같은 방식으로 추가해야 합니다.
+- `distribution`은 `AlmaLinux`, `Rocky` 중 하나를 사용합니다(`vars/os_*.yml`
+  파일명 규칙과 동일). target을 실제로 컴파일하려면 `.github/workflows/build.yml`의
+  "Locate cloud image URL" 단계에 해당 배포판의 공식 GenericCloud 이미지
+  조회 로직이 있어야 합니다. 현재는 AlmaLinux와 Rocky만 구현되어 있습니다.
 - 같은 소스 tarball이 여러 OS/벤더 조합에 쓰인다면 `targets`에 여러 항목을 나열하면
   하나의 가이드로 여러 매트릭스 항목이 생성됩니다.
 - 이 디렉토리는 현재 스캐폴딩만 되어 있는 상태입니다. 실제 `*.tar.gz`와

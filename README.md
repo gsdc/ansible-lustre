@@ -15,7 +15,7 @@ Role Variables
 * `lustre_vendor`: `"cray"`[default] | `"ddn"` | `"whamcloud"` — `vars/os_<Distribution><Version>_<Vendor>.yml`
   파일을 고르는 데 사용됩니다.
 * `lustre_network`: Lustre 스토리지와 연결될 때 사용하는 네트워크 주소. 예) `10.0.0.0/8`
-* `dkms_only`: `false`[default] — `true`로 설정하면 커널 버전에 종속된 kmod 패키지
+* `lustre_dkms`: `false`[default] — `true`로 설정하면 커널 버전에 종속된 kmod 패키지
   (`client_packages`) 대신, 대상 `os_*.yml`에 정의된 DKMS 패키지 목록
   (`client_packages_dkms`)을 설치합니다. 대상 조합에 `client_packages_dkms`가
   정의되어 있어야 동작합니다.
@@ -25,7 +25,7 @@ Role Variables
 `vars/os_<Distribution><Version>_<Vendor>.yml`에 `lustre_release_tag`가
 정의되어 있으면, `tasks/client.yml`이 이 저장소의 GitHub Release
 (`https://github.com/gsdc/ansible-lustre/releases/download/<lustre_release_tag>/<파일명>`)에서
-`client_packages`(또는 `dkms_only: true`일 때 `client_packages_dkms`)를 직접
+`client_packages`(또는 `lustre_dkms: true`일 때 `client_packages_dkms`)를 직접
 다운로드합니다. `lustre_release_tag`가 없으면 예전 방식대로 `files/<Distribution><Version>_<Vendor>/`
 아래 로컬 파일을 사용합니다.
 
@@ -36,8 +36,7 @@ Role Variables
 
 현재 지원하는 OS/vendor 조합
 ----------------------------
-* AlmaLinux 9.7: `cray`, `ddn` (release 기반으로 갱신 중 — 일시적으로 미동작할 수 있음)
-* AlmaLinux 9.8: `cray`, `ddn` (release 기반)
+* AlmaLinux 9.7, 9.8: `cray`, `ddn` (release 기반)
 * AlmaLinux 9.8: `whamcloud` (release 기반, `lustre/lustre-release` 최신 태그 자동 추적)
 * Rocky 9.7, 9.8: `cray` (release 기반)
 
@@ -67,7 +66,7 @@ Including an example of how to use your role (for instance, with variables passe
     - role: gsdc.lustre
       lustre_vendor: "cray"
       lustre_network: "192.168.0.0/16"
-      # dkms_only: true   # 필요하면 커널 버전 종속 kmod 대신 DKMS 패키지 사용
+      # lustre_dkms: true   # 필요하면 커널 버전 종속 kmod 대신 DKMS 패키지 사용
   become: yes
 ```
 License

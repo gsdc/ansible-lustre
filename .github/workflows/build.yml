@@ -11,8 +11,22 @@ on:
       - 'AlmaLinux_*'
       - 'Alma_*'
       - 'Rocky_*'
-      - 'CentOS_*'
-  workflow_dispatch: {}
+  # Alternative to the tag-push trigger above: run manually with specific
+  # inputs, no tag create/delete dance needed to target one OS/vendor.
+  workflow_dispatch:
+    inputs:
+      distribution:
+        description: 'Only build this distribution (e.g. AlmaLinux, Rocky). Leave empty to build everything.'
+        type: string
+        default: ''
+      version:
+        description: 'Only build this version (e.g. 9.7). Used together with distribution.'
+        type: string
+        default: ''
+      vendor:
+        description: 'Only build this vendor (e.g. cray, ddn, whamcloud). Leave empty to build every vendor for the given distribution+version.'
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -33,22 +47,39 @@ jobs:
 
       - run: pip install pyyaml
 
-      - name: Parse target from tag
+      - name: Determine target filter
         id: tag
+        env:
+          INPUT_DISTRIBUTION: ${{ github.event.inputs.distribution }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VENDOR: ${{ github.event.inputs.vendor }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
+          # Accept short aliases for distribution names (tag or dispatch input).
+          normalize_distribution() {
+            case "$1" in
+              Alma) echo "AlmaLinux" ;;
+              *) echo "$1" ;;
+            esac
+          }
+
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${{ github.event_name }}" = "push" ]; then
             tag="${{ github.ref_name }}"
             IFS='_' read -r distribution version vendor _rest <<< "$tag"
             if [ -z "$distribution" ] || [ -z "$version" ] || [ -z "$vendor" ]; then
               echo "::error::Tag '$tag' doesn't match <Distribution>_<Version>_<Vendor>_<...> format"
               exit 1
             fi
-            # Accept short aliases for distribution names in the tag.
-            case "$distribution" in
-              Alma) distribution="AlmaLinux" ;;
-            esac
+            distribution=$(normalize_distribution "$distribution")
             echo "::notice::Tag '$tag' -> building only ${distribution} ${version} (${vendor})"
             echo "filter=${distribution}${version}_${vendor}" >> "$GITHUB_OUTPUT"
+          elif [ -n "$INPUT_DISTRIBUTION" ] && [ -n "$INPUT_VERSION" ]; then
+            distribution=$(normalize_distribution "$INPUT_DISTRIBUTION")
+            label="${distribution}${INPUT_VERSION}"
+            if [ -n "$INPUT_VENDOR" ]; then
+              label="${label}_${INPUT_VENDOR}"
+            fi
+            echo "::notice::workflow_dispatch inputs -> building only ${label}"
+            echo "filter=${label}" >> "$GITHUB_OUTPUT"
           else
             echo "filter=" >> "$GITHUB_OUTPUT"
           fi
@@ -81,14 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Skip DKMS-only target (no compile needed)
-        if: matrix.produces_dkms
-        run: |
-          echo "::notice::${{ matrix.label }} only ships a DKMS package (from ${{ matrix.source }})."
-          echo "::notice::DKMS rebuilds the kernel module on the target host at install time, so no CI compile is attempted."
-
       - name: Enable KVM access
-        if: ${{ !matrix.produces_dkms }}
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -96,13 +120,11 @@ jobs:
           ls -l /dev/kvm
 
       - name: Install VM tooling
-        if: ${{ !matrix.produces_dkms }}
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
 
       - name: Check for pre-baked VM image
-        if: ${{ !matrix.produces_dkms }}
         id: baked
         env:
           GH_TOKEN: ${{ github.token }}
@@ -118,7 +140,7 @@ jobs:
           fi
 
       - name: Download pre-baked VM image
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available == 'true' }}
+        if: ${{ steps.baked.outputs.available == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -127,7 +149,7 @@ jobs:
           ls -lh disk.qcow2
 
       - name: Locate cloud image URL
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' }}
         id: image
         run: |
           set -euo pipefail
@@ -193,7 +215,7 @@ jobs:
           esac
 
       - name: Cache cloud image
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' }}
         uses: actions/cache@v4
         with:
           path: base.qcow2
@@ -202,7 +224,7 @@ jobs:
           key: cloud-image-${{ steps.image.outputs.url }}
 
       - name: Download base cloud image
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' }}
         run: |
           if [ -f base.qcow2 ]; then
             echo "Using cached base.qcow2"
@@ -213,7 +235,6 @@ jobs:
           qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
 
       - name: Build cloud-init seed
-        if: ${{ !matrix.produces_dkms }}
         run: |
           ssh-keygen -t ed25519 -N '' -f vm_key -q
           cat > user-data <<CLOUDINIT
@@ -233,7 +254,6 @@ jobs:
           cloud-localds seed.iso user-data meta-data
 
       - name: Boot VM
-        if: ${{ !matrix.produces_dkms }}
         run: |
           qemu-system-x86_64 \
             -machine accel=kvm -cpu host -smp 2 -m 4096 \
@@ -245,7 +265,6 @@ jobs:
             -monitor none
 
       - name: Wait for SSH
-        if: ${{ !matrix.produces_dkms }}
         run: |
           for i in $(seq 1 60); do
             if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
@@ -259,7 +278,7 @@ jobs:
           exit 1
 
       - name: Pin repos to vault snapshot
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' && steps.image.outputs.vault == 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' && steps.image.outputs.vault == 'true' }}
         env:
           VAULT_VERSION: ${{ matrix.version }}
           VAULT_DISTRIBUTION: ${{ matrix.distribution }}
@@ -286,7 +305,7 @@ jobs:
           REMOTE
 
       - name: Reboot into the latest kernel
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' }}
         run: |
           ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
           ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
@@ -303,13 +322,13 @@ jobs:
           exit 1
 
       - name: Copy source into VM
-        if: ${{ !matrix.produces_dkms && (matrix.source_type == 'tarball' || matrix.source_type == 'srpm_zip') }}
+        if: ${{ matrix.source_type == 'tarball' || matrix.source_type == 'srpm_zip' }}
         run: |
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
             "srpm/${{ matrix.source }}" builder@127.0.0.1:/home/builder/
 
       - name: Install build dependencies in VM
-        if: ${{ !matrix.produces_dkms && steps.baked.outputs.available != 'true' }}
+        if: ${{ steps.baked.outputs.available != 'true' }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
           set -euo pipefail
@@ -331,7 +350,7 @@ jobs:
       # the zip and install the srpm, which populates ~/rpmbuild/SPECS +
       # SOURCES the same way it would on a real build host.
       - name: Unpack srpm from zip in VM
-        if: ${{ !matrix.produces_dkms && matrix.source_type == 'srpm_zip' }}
+        if: ${{ matrix.source_type == 'srpm_zip' }}
         env:
           SOURCE_NAME: ${{ matrix.source }}
           SRPM_PATH_IN_ZIP: ${{ matrix.srpm_path_in_zip }}
@@ -356,7 +375,7 @@ jobs:
       # a synthetic name, so the actual filename is captured and passed on to
       # the "Run rpmbuild in VM" step instead of reusing matrix.source.
       - name: Fetch and package Whamcloud source in VM
-        if: ${{ !matrix.produces_dkms && matrix.source_type == 'github' }}
+        if: ${{ matrix.source_type == 'github' }}
         id: whamcloud
         env:
           LUSTRE_REF: ${{ matrix.github_ref }}
@@ -402,7 +421,6 @@ jobs:
           echo "source_name=$actual_name" >> "$GITHUB_OUTPUT"
 
       - name: Run rpmbuild in VM
-        if: ${{ !matrix.produces_dkms }}
         env:
           RPMBUILD_OPTIONS: ${{ matrix.rpmbuild_options }}
           SOURCE_NAME: ${{ matrix.source_type == 'github' && steps.whamcloud.outputs.source_name || matrix.source }}
@@ -428,10 +446,9 @@ jobs:
       # portable lustre-client-dkms rpm from the same source (via the
       # `make dkms-rpm` target, which generates lustre-dkms.spec through the
       # same ./configure substitution as lustre.spec) and publish both to the
-      # same release. The ansible role's `dkms_only` mode installs this one
+      # same release. The ansible role's `lustre_dkms` mode installs this one
       # instead of the kernel-specific kmod package.
       - name: Build DKMS rpm in VM
-        if: ${{ !matrix.produces_dkms }}
         env:
           SOURCE_NAME: ${{ matrix.source_type == 'github' && steps.whamcloud.outputs.source_name || matrix.source }}
           SOURCE_TYPE: ${{ matrix.source_type }}
@@ -480,7 +497,6 @@ jobs:
           REMOTE
 
       - name: Install and modprobe the built kmod in VM
-        if: ${{ !matrix.produces_dkms }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
           set -euo pipefail
@@ -499,14 +515,12 @@ jobs:
           REMOTE
 
       - name: Copy built RPMs out of VM
-        if: ${{ !matrix.produces_dkms }}
         run: |
           mkdir -p RPMS
           scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 -r \
             builder@127.0.0.1:rpmbuild/RPMS/. RPMS/
 
       - name: Upload built RPMs
-        if: ${{ !matrix.produces_dkms }}
         uses: actions/upload-artifact@v4
         with:
           name: lustre-${{ matrix.label }}
@@ -514,7 +528,6 @@ jobs:
           if-no-files-found: error
 
       - name: Publish built RPMs to GitHub Release
-        if: ${{ !matrix.produces_dkms }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_NAME: ${{ matrix.source }}
@@ -541,9 +554,9 @@ jobs:
             | while read -r old_tag; do
                 echo "::notice::Removing superseded release '$old_tag' (replaced by '$tag')"
                 gh release delete "$old_tag" --yes --cleanup-tag
-              done
+              done || true
 
       - name: Shut down VM
-        if: always() && !matrix.produces_dkms
+        if: always()
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true

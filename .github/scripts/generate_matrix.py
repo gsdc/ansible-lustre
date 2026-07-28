@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Build the GitHub Actions compile matrix from srpm/*.build.yml guides.
 
-Each build guide describes one source rpm and the OS/vendor targets it
-should be compiled for. Targets whose package is DKMS-based don't need a
-kernel-specific pre-compile (the module is rebuilt on the target host at
-install time), so they're marked to be skipped rather than compiled.
+Each build guide describes one source and the OS/vendor targets it should be
+compiled for. Every target is built as both a kernel-specific kmod package
+and a portable DKMS package (see build.yml's "Build DKMS rpm in VM" step);
+the ansible role's `lustre_dkms` variable picks which one gets installed.
 """
 import argparse
 import glob
@@ -135,7 +135,6 @@ def main():
 
     for guide_path in guides:
         guide, source_name, source_type, github_ref, srpm_path_in_zip, targets = load_guide(guide_path)
-        produces_dkms = bool(guide.get("produces_dkms", False))
         rpmbuild_options = guide.get("rpmbuild_options", DEFAULT_RPMBUILD_OPTIONS)
 
         for target in targets:
@@ -151,7 +150,6 @@ def main():
                 "distribution": distribution,
                 "version": version,
                 "vendor": vendor,
-                "produces_dkms": produces_dkms,
                 "rpmbuild_options": rpmbuild_options,
                 "label": f"{distribution}{version}_{vendor}".strip("_"),
                 "os_key": f"{distribution}{version}",
@@ -186,12 +184,7 @@ def main():
         for line in lines:
             print(line)
 
-    to_compile = [i for i in include if not i["produces_dkms"]]
-    to_skip = [i for i in include if i["produces_dkms"]]
-    print(
-        f"Discovered {len(include)} target(s) from {len(guides)} build guide(s): "
-        f"{len(to_compile)} to compile, {len(to_skip)} to skip (DKMS-only)."
-    )
+    print(f"Discovered {len(include)} target(s) from {len(guides)} build guide(s).")
 
 
 if __name__ == "__main__":
