@@ -138,7 +138,7 @@ jobs:
               live_index="https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/"
               file=$(curl -sL "$live_index" \
                 | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
-                | sort -V | tail -n1)
+                | sort -V | tail -n1 || true)
               if [ -n "$file" ]; then
                 echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
                 echo "vault=false" >> "$GITHUB_OUTPUT"
@@ -150,7 +150,7 @@ jobs:
                 vault_index="https://vault.almalinux.org/${{ matrix.version }}/cloud/x86_64/images/"
                 file=$(curl -sL "$vault_index" \
                   | grep -oE "AlmaLinux-${major}-GenericCloud-${{ matrix.version }}-[0-9]+\.x86_64\.qcow2" \
-                  | sort -V | tail -n1)
+                  | sort -V | tail -n1 || true)
                 if [ -z "$file" ]; then
                   echo "::error::Could not find an AlmaLinux ${{ matrix.version }} GenericCloud image on repo.almalinux.org or vault.almalinux.org"
                   exit 1
@@ -166,7 +166,7 @@ jobs:
               live_index="https://dl.rockylinux.org/pub/rocky/${major}/images/x86_64/"
               file=$(curl -sL "$live_index" \
                 | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
-                | sort -V | tail -n1)
+                | sort -V | tail -n1 || true)
               if [ -n "$file" ]; then
                 echo "url=${live_index}${file}" >> "$GITHUB_OUTPUT"
                 echo "vault=false" >> "$GITHUB_OUTPUT"
@@ -176,7 +176,7 @@ jobs:
                 vault_index="https://dl.rockylinux.org/vault/rocky/${{ matrix.version }}/images/x86_64/"
                 file=$(curl -sL "$vault_index" \
                   | grep -oE "Rocky-${major}-GenericCloud-Base-${{ matrix.version }}-[0-9]+\.[0-9]+\.x86_64\.qcow2" \
-                  | sort -V | tail -n1)
+                  | sort -V | tail -n1 || true)
                 if [ -z "$file" ]; then
                   echo "::error::Could not find a Rocky ${{ matrix.version }} GenericCloud image on the live mirror or the vault"
                   exit 1
@@ -368,7 +368,7 @@ jobs:
               | sed 's/_/./g' \
               | sort -V \
               | tail -n1 \
-              | sed 's/\./_/g')
+              | sed 's/\./_/g' || true)
             if [ -z "$LUSTRE_REF" ]; then
               echo "::error::Could not resolve 'latest' lustre-release tag"
               exit 1
