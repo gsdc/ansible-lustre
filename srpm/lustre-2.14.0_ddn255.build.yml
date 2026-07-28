@@ -1,6 +1,9 @@
 source: lustre-2.14.0_ddn255.tar.gz
 targets:
   - distribution: AlmaLinux
+    version: "9.7"
+    vendor: ddn
+  - distribution: AlmaLinux
     version: "9.8"
     vendor: ddn
 
