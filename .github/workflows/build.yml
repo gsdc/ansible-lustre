@@ -350,14 +350,19 @@ jobs:
       # at the guide's github_ref and package it the same way a vendor would
       # (autogen.sh + configure + make dist), so the result can feed into the
       # same generic "Run rpmbuild in VM" step below.
+      # rpmbuild -tb requires the tarball's ON-DISK filename to exactly match
+      # the "%{name}-%{version}.tar.gz" that autoconf/automake baked into the
+      # generated spec (e.g. lustre-2.17.56.tar.gz) - it can't be renamed to
+      # a synthetic name, so the actual filename is captured and passed on to
+      # the "Run rpmbuild in VM" step instead of reusing matrix.source.
       - name: Fetch and package Whamcloud source in VM
         if: ${{ !matrix.produces_dkms && matrix.source_type == 'github' }}
+        id: whamcloud
         env:
           LUSTRE_REF: ${{ matrix.github_ref }}
-          SOURCE_NAME: ${{ matrix.source }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
-            "LUSTRE_REF='${LUSTRE_REF}' SOURCE_NAME='${SOURCE_NAME}' bash -s" <<'REMOTE'
+            "LUSTRE_REF='${LUSTRE_REF}' bash -s" <<'REMOTE'
           set -euo pipefail
           if [ "$LUSTRE_REF" = "latest" ]; then
             # Lustre release tags look like v2_17_56 (underscores, not dots).
@@ -385,14 +390,22 @@ jobs:
             echo "::error::'make dist' did not produce a tarball"
             exit 1
           fi
-          cp "$dist_tarball" "$HOME/${SOURCE_NAME}"
+          cp "$dist_tarball" "$HOME/"
+          echo "$(basename "$dist_tarball")" > "$HOME/.whamcloud_source_name"
           REMOTE
+
+          actual_name=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'cat "$HOME/.whamcloud_source_name"')
+          if [ -z "$actual_name" ]; then
+            echo "::error::Could not determine the make-dist tarball name"
+            exit 1
+          fi
+          echo "source_name=$actual_name" >> "$GITHUB_OUTPUT"
 
       - name: Run rpmbuild in VM
         if: ${{ !matrix.produces_dkms }}
         env:
           RPMBUILD_OPTIONS: ${{ matrix.rpmbuild_options }}
-          SOURCE_NAME: ${{ matrix.source }}
+          SOURCE_NAME: ${{ matrix.source_type == 'github' && steps.whamcloud.outputs.source_name || matrix.source }}
           SOURCE_TYPE: ${{ matrix.source_type }}
         run: |
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
