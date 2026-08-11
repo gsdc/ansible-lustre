@@ -111,13 +111,30 @@
       command: "ip -4 route get {{ lustre_mgs_address.split('@')[0] }}"
       register: lustre_mgs_route
       changed_when: false
+    # regex_search에 캡처 그룹을 넘기면 문자열이 아니라 그룹들의 "리스트"를
+    # 반환한다(예: ['eth0']). 그대로 보간하면 networks="tcp(['eth0'])" 가 되어
+    # lnet이 인터페이스를 인식하지 못하므로 first로 문자열을 꺼낸다.
     - name: Private network interface 확인
       set_fact:
-        private_interface: "{{ lustre_mgs_route.stdout | regex_search('dev (\\S+)', '\\1') }}"
+        # 매칭 실패 시 regex_search는 None을 반환하고 None|first는 예외가 되므로,
+        # or ['']로 흘려보내 빈 문자열이 되도록 한다.
+        private_interface: "{{ (lustre_mgs_route.stdout | regex_search('dev (\\S+)', '\\1') or ['']) | first }}"
+
+    - name: 인터페이스 탐지 실패 경고
+      debug:
+        msg: >-
+          경고: {{ lustre_mgs_address }} 로 라우팅되는 인터페이스를 찾지 못해
+          /etc/modprobe.d/lustre.conf 를 빈 파일로 둡니다.
+          'ip -4 route get' 출력: {{ lustre_mgs_route.stdout | trim }}
+      when: private_interface | length == 0
+
+    # 인터페이스를 못 찾았으면 networks="tcp()" 같은 깨진 값을 쓰지 않고 빈 파일로
+    # 둔다. 그러면 lnet이 이 파일의 설정 없이 자체 기본 동작을 하게 되고, 잘못된
+    # 설정으로 모듈 로드가 실패하는 상황을 피할 수 있다.
     - name: lnet 네트워크를 modprobe.d에 기록
       copy:
         dest: /etc/modprobe.d/lustre.conf
-        content: "options lnet networks=\"tcp({{ private_interface }})\"\n"
+        content: "{{ 'options lnet networks=\"tcp(' ~ private_interface ~ ')\"\n' if private_interface | length > 0 else '' }}"
         mode: "0644"
 
 - name: 커널 모듈 의존성 트리 재생성
