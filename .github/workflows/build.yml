@@ -11,12 +11,14 @@ on:
       - 'AlmaLinux_*'
       - 'Alma_*'
       - 'Rocky_*'
+      - 'CentOSStream_*'
+      - 'CentOS_*'
   # Alternative to the tag-push trigger above: run manually with specific
   # inputs, no tag create/delete dance needed to target one OS/vendor.
   workflow_dispatch:
     inputs:
       distribution:
-        description: 'Only build this distribution (e.g. AlmaLinux, Rocky). Leave empty to build everything.'
+        description: 'Only build this distribution (e.g. AlmaLinux, Rocky, CentOSStream). Leave empty to build everything.'
         type: string
         default: ''
       version:
@@ -58,6 +60,7 @@ jobs:
           normalize_distribution() {
             case "$1" in
               Alma) echo "AlmaLinux" ;;
+              CentOS) echo "CentOSStream" ;;
               *) echo "$1" ;;
             esac
           }
@@ -207,6 +210,15 @@ jobs:
                 echo "vault=true" >> "$GITHUB_OUTPUT"
                 echo "::notice::${{ matrix.version }} is no longer on the live Rocky mirror; using the frozen dl.rockylinux.org/vault snapshot instead."
               fi
+              ;;
+            CentOSStream)
+              # CentOS Stream is a rolling release - there's no per-minor
+              # vault like AlmaLinux/Rocky, just one "latest" GenericCloud
+              # image per major version.
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              echo "url=https://cloud.centos.org/centos/${major}-stream/x86_64/images/CentOS-Stream-GenericCloud-${major}-latest.x86_64.qcow2" >> "$GITHUB_OUTPUT"
+              echo "vault=false" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."

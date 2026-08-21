@@ -8,5 +8,8 @@ targets:
   - distribution: AlmaLinux
     version: "9.8"
     vendor: whamcloud
+  - distribution: CentOSStream
+    version: "9"
+    vendor: whamcloud
 
 rpmbuild_options: "--without servers --without zfs --with ldiskfs --without gss-keyring --without mpi --without o2ib"
