@@ -145,6 +145,15 @@ jobs:
                 echo "::notice::${{ matrix.version }} is no longer on the live Rocky mirror; using the frozen dl.rockylinux.org/vault snapshot instead."
               fi
               ;;
+            CentOSStream)
+              # CentOS Stream is a rolling release - there's no per-minor
+              # vault like AlmaLinux/Rocky, just one "latest" GenericCloud
+              # image per major version.
+              major="${{ matrix.version }}"
+              major="${major%%.*}"
+              echo "url=https://cloud.centos.org/centos/${major}-stream/x86_64/images/CentOS-Stream-GenericCloud-${major}-latest.x86_64.qcow2" >> "$GITHUB_OUTPUT"
+              echo "vault=false" >> "$GITHUB_OUTPUT"
+              ;;
             *)
               echo "::error::No cloud image lookup implemented yet for distribution '${{ matrix.distribution }}'. Add one in this step."
               exit 1
