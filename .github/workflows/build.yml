@@ -345,7 +345,8 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
           set -euo pipefail
           sudo dnf -y install dnf-plugins-core
-          sudo dnf config-manager --set-enabled crb || true
+          # CRB (EL9+) vs PowerTools (EL8) - repo name differs by major version.
+          sudo dnf config-manager --set-enabled crb || sudo dnf config-manager --set-enabled powertools || true
           sudo dnf -y install epel-release
           sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
             "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \

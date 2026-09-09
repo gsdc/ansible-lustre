@@ -260,7 +260,8 @@ jobs:
             exit 1
           fi
           ssh_run 'sudo dnf -y install dnf-plugins-core'
-          ssh_run 'sudo dnf config-manager --set-enabled crb' || true
+          # CRB (EL9+) vs PowerTools (EL8) - repo name differs by major version.
+          ssh_run 'sudo dnf config-manager --set-enabled crb || sudo dnf config-manager --set-enabled powertools' || true
           ssh_run 'sudo dnf -y install epel-release'
           ssh_run 'sudo dnf -y install "@Development Tools" rpm-build rpmdevtools rpmrebuild \
             "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
