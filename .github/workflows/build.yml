@@ -345,7 +345,8 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 bash -s <<'REMOTE'
           set -euo pipefail
           sudo dnf -y install dnf-plugins-core
-          sudo dnf config-manager --set-enabled crb || true
+          # CRB (EL9+) vs PowerTools (EL8) - repo name differs by major version.
+          sudo dnf config-manager --set-enabled crb || sudo dnf config-manager --set-enabled powertools || true
           sudo dnf -y install epel-release
           sudo dnf -y install '@Development Tools' rpm-build rpmdevtools rpmrebuild \
             "kernel-devel-$(uname -r)" kernel-headers kernel-abi-stablelists kernel-rpm-macros \
@@ -450,6 +451,24 @@ jobs:
             fi
             rpmbuild -bb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$spec"
           else
+            # Lustre-family raw source tarballs (whamcloud/ddn/...) keep spec
+            # helper files (find-provides, kmp-*.preamble/.files, ...) under a
+            # nested rpm/ subdir, declared in lustre.spec as bare-name Sources
+            # (e.g. "Source12: find-provides") that rpmbuild resolves via
+            # %{_sourcedir}. For a plain "rpmbuild -tb" build, %{_sourcedir}
+            # resolves to the directory holding the tarball itself (here
+            # $HOME), not that nested rpm/ dir. Some rpm versions cope with
+            # this regardless, but on EL8's rpm it's a hard failure
+            # ("Couldn't exec .../find-provides: No such file or directory").
+            # Stage a flat copy of those helper files into $HOME so they're
+            # found wherever %{_sourcedir} actually resolves.
+            stage_dir=$(mktemp -d)
+            tar xzf "$HOME/${SOURCE_NAME}" -C "$stage_dir"
+            rpm_helpers_dir=$(find "$stage_dir" -mindepth 2 -maxdepth 2 -type d -name rpm | head -n1)
+            if [ -n "$rpm_helpers_dir" ]; then
+              cp -n "$rpm_helpers_dir"/* "$HOME/" 2>/dev/null || true
+            fi
+            rm -rf "$stage_dir"
             rpmbuild -tb --define "kver $(uname -r)" ${RPMBUILD_OPTIONS} "$HOME/${SOURCE_NAME}"
           fi
           REMOTE
