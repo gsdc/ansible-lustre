@@ -18,6 +18,9 @@ targets:
   - distribution: Rocky
     version: "9.8"
     vendor: cray
+  - distribution: Rocky
+    version: "9.9"
+    vendor: cray
   - distribution: CentOSStream
     version: "9"
     vendor: cray
