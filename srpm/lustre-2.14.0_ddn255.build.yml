@@ -9,6 +9,9 @@ targets:
   - distribution: AlmaLinux
     version: "9.8"
     vendor: ddn
+  - distribution: AlmaLinux
+    version: "9.9"
+    vendor: ddn
   - distribution: CentOSStream
     version: "9"
     vendor: ddn
