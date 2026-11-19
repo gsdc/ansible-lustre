@@ -1,0 +1,283 @@
+name: Test existing Lustre RPMs on a newer OS minor
+
+# 새 마이너 버전(예: AlmaLinux 9.9)이 나왔을 때, 이전 마이너(예: 9.8)용으로 이미
+# 빌드해서 GitHub Release에 올려둔 lustre rpm을 재빌드 없이 그대로 쓸 수 있는지
+# 점검한다. 대상 마이너의 GenericCloud 이미지를 QEMU/KVM으로 부팅해서
+#   - kmod : kmod-lustre-client(이전 커널용)를 설치 -> weak-modules(kABI 호환)로
+#            새 커널의 weak-updates/에 링크되어 modprobe 되는지
+#   - dkms : lustre-client-dkms를 설치 -> 새 커널에서 DKMS 컴파일 + modprobe 되는지
+# 를 각각 확인한다. kmod가 실패하면 커널 symvers와 모듈 CRC를 비교해서 kABI가
+# 깨진 심볼 목록도 결과 요약에 남긴다.
+on:
+  workflow_dispatch:
+    inputs:
+      source_version:
+        description: 'RPM이 빌드된 AlmaLinux 버전 (vars/os_AlmaLinux<버전>_<vendor>.yml 사용)'
+        type: string
+        default: '9.8'
+      target_version:
+        description: '테스트할 새 AlmaLinux 버전'
+        type: string
+        default: '9.9'
+      vendors:
+        description: '테스트할 vendor 목록 (JSON 배열)'
+        type: string
+        default: '["ddn", "cray"]'
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: "AlmaLinux${{ inputs.source_version || '9.8' }} ${{ matrix.vendor }} rpm on ${{ inputs.target_version || '9.9' }} (${{ matrix.mode }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vendor: ${{ fromJson(inputs.vendors || '["ddn", "cray"]') }}
+        mode: [kmod, dkms]
+    env:
+      SRC_VER: ${{ inputs.source_version || '9.8' }}
+      DST_VER: ${{ inputs.target_version || '9.9' }}
+      VENDOR: ${{ matrix.vendor }}
+      MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve release tag and packages from vars
+        id: pkgs
+        run: |
+          set -euo pipefail
+          vars_file="vars/os_AlmaLinux${SRC_VER}_${VENDOR}.yml"
+          if [ ! -f "$vars_file" ]; then
+            echo "::error::$vars_file 이 없습니다"
+            exit 1
+          fi
+          python3 - "$vars_file" "$MODE" >> "$GITHUB_OUTPUT" <<'PY'
+          import sys, yaml
+          v = yaml.safe_load(open(sys.argv[1]))
+          key = "client_packages_dkms" if sys.argv[2] == "dkms" else "client_packages"
+          print(f"tag={v['lustre_release_tag']}")
+          print(f"files={' '.join(v[key])}")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+      - name: Download released RPMs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pkgs.outputs.tag }}
+          FILES: ${{ steps.pkgs.outputs.files }}
+        run: |
+          set -euo pipefail
+          mkdir -p rpms
+          for f in $FILES; do
+            gh release download "$TAG" --pattern "$f" --dir rpms --clobber
+          done
+          ls -l rpms
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install VM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils openssh-client
+
+      - name: Locate cloud image URL
+        id: image
+        run: |
+          set -euo pipefail
+          major="${DST_VER%%.*}"
+          for index in "https://repo.almalinux.org/almalinux/${major}/cloud/x86_64/images/" \
+                       "https://vault.almalinux.org/${DST_VER}/cloud/x86_64/images/"; do
+            file=$(curl -sL "$index" \
+              | grep -oE "AlmaLinux-${major}-GenericCloud-${DST_VER}-[0-9]+\.x86_64\.qcow2" \
+              | sort -V | tail -n1 || true)
+            if [ -n "$file" ]; then
+              echo "url=${index}${file}" >> "$GITHUB_OUTPUT"
+              echo "::notice::Using ${index}${file}"
+              exit 0
+            fi
+          done
+          echo "::error::AlmaLinux ${DST_VER} GenericCloud 이미지를 찾을 수 없습니다"
+          exit 1
+
+      - name: Cache cloud image
+        uses: actions/cache@v6
+        with:
+          path: base.qcow2
+          key: cloud-image-${{ steps.image.outputs.url }}
+
+      - name: Download base cloud image
+        run: |
+          [ -f base.qcow2 ] || curl -sL -o base.qcow2 "${{ steps.image.outputs.url }}"
+          qemu-img create -f qcow2 -F qcow2 -b "$(pwd)/base.qcow2" disk.qcow2 20G
+
+      - name: Build cloud-init seed
+        run: |
+          ssh-keygen -t ed25519 -N '' -f vm_key -q
+          cat > user-data <<CLOUDINIT
+          #cloud-config
+          users:
+            - name: builder
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - $(cat vm_key.pub)
+          ssh_pwauth: false
+          CLOUDINIT
+          cat > meta-data <<CLOUDINIT
+          instance-id: lustre-compat-${VENDOR}-${MODE}
+          local-hostname: lustre-compat
+          CLOUDINIT
+          cloud-localds seed.iso user-data meta-data
+
+      - name: Boot VM
+        run: |
+          qemu-system-x86_64 \
+            -machine accel=kvm -cpu host -smp 2 -m 4096 \
+            -drive file=disk.qcow2,if=virtio \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -nic user,model=virtio,hostfwd=tcp::2222-:22 \
+            -display none -daemonize \
+            -serial file:console.log \
+            -monitor none
+
+      - name: Wait for SSH
+        run: |
+          for i in $(seq 1 60); do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 true 2>/dev/null; then
+              echo "SSH is up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM never became reachable over SSH"
+          cat console.log || true
+          exit 1
+
+      # 실제 배포 절차(README: 최신 커널로 업그레이드 후 설치)와 동일하게
+      # 대상 마이너의 최신 커널로 올린 뒤 테스트한다.
+      - name: Update to the latest kernel and reboot
+        run: |
+          ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
+          ssh_run 'sudo dnf -y update kernel kernel-core kernel-modules'
+          ssh_run 'sudo systemctl reboot' || true
+          sleep 10
+          for i in $(seq 1 60); do
+            if ssh_run true 2>/dev/null; then
+              ssh_run 'cat /etc/almalinux-release; uname -r'
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VM did not come back after reboot"
+          exit 1
+
+      - name: Copy RPMs into VM
+        run: |
+          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -P 2222 \
+            rpms/*.rpm builder@127.0.0.1:/home/builder/
+
+      - name: Install and modprobe in VM
+        id: test
+        run: |
+          set +e
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 \
+            "MODE='${MODE}' bash -s" <<'REMOTE' | tee result.log
+          set -uo pipefail
+          kver=$(uname -r)
+          echo "RESULT kernel=$kver"
+          echo "RESULT os=$(cat /etc/almalinux-release)"
+
+          if [ "$MODE" = "dkms" ]; then
+            sudo dnf -y install dnf-plugins-core
+            sudo dnf config-manager --set-enabled crb
+            sudo dnf -y install epel-release
+            sudo dnf -y install "kernel-devel-$kver" dkms gcc make \
+              autoconf automake libtool libyaml-devel libnl3-devel \
+              elfutils-libelf-devel openssl-devel keyutils-libs-devel
+          fi
+
+          if sudo dnf -y install $HOME/*.rpm 2>&1 | tee /tmp/dnf.log; then
+            echo "RESULT dnf_install=ok"
+          else
+            echo "RESULT dnf_install=FAIL"
+            echo "RESULT dnf_unresolved_kernel_symbols=$(grep -c 'nothing provides kernel(' /tmp/dnf.log)"
+            if [ "$MODE" = "kmod" ]; then
+              # rpm 의존성(kernel(symbol)=hash 등)에서 막힌 경우에도 실제 모듈이
+              # 새 커널에서 쓸 수 있는지 보기 위해 --nodeps로 강제 설치해 본다.
+              sudo rpm -ivh --nodeps $HOME/*.rpm && echo "RESULT forced_nodeps_install=ok"
+            fi
+          fi
+          rpm -qa | grep -i lustre
+
+          if [ "$MODE" = "dkms" ]; then
+            echo "--- dkms status ---"
+            sudo dkms status
+            if ! sudo dkms status | grep -q "${kver}.*installed"; then
+              echo "RESULT dkms_build=FAIL"
+              sudo find /var/lib/dkms -name make.log -exec tail -n 80 {} \;
+            else
+              echo "RESULT dkms_build=ok"
+            fi
+          else
+            echo "--- weak-updates for $kver ---"
+            ls -l "/lib/modules/$kver/weak-updates/" -R 2>/dev/null | grep -E '\.ko' || echo "(none)"
+            # kABI 진단: 모듈이 참조하는 커널 심볼의 CRC를 새 커널의 symvers와 비교.
+            # EL9는 symvers.gz, 일부 커널은 symvers.xz로 배포된다.
+            symvers=$(ls /lib/modules/$kver/symvers.{gz,xz} /boot/symvers-$kver.{gz,xz} 2>/dev/null | head -n1)
+            if [ -z "$symvers" ]; then
+              echo "RESULT kabi_check=skipped (symvers not found)"
+            else
+              case "$symvers" in *.xz) xzcat "$symvers";; *) zcat "$symvers";; esac \
+                | awk '{print $2, $1}' | sort > /tmp/kernel.crc
+              : > /tmp/mismatch
+              for ko in $(rpm -ql $(rpm -qa 'kmod-lustre-client*') | grep '\.ko'); do
+                f="$ko"; case "$ko" in *.xz) xz -dc "$ko" > /tmp/m.ko; f=/tmp/m.ko;; esac
+                /sbin/modprobe --dump-modversions "$f" | awk '{print $2, $1}' | sort > /tmp/mod.crc
+                # 커널이 export하는 심볼만 비교 (lustre 모듈 간 심볼은 제외)
+                join /tmp/mod.crc /tmp/kernel.crc | awk -v m="$(basename "$ko")" '$2!=$3 {print m, $1}' >> /tmp/mismatch
+              done
+              n=$(sort -u /tmp/mismatch | wc -l)
+              echo "RESULT kabi_mismatch_symbols=$n"
+              sort -u /tmp/mismatch | head -n 50 | sed 's/^/MISMATCH /'
+            fi
+          fi
+
+          if sudo depmod -a && sudo modprobe lustre; then
+            echo "RESULT modprobe=ok"
+            lsmod | grep -E 'lustre|lnet|libcfs'
+            modinfo -n lustre
+            echo "RESULT module_path=$(modinfo -n lustre)"
+            exit 0
+          else
+            echo "RESULT modprobe=FAIL"
+            sudo dmesg | tail -n 40
+            exit 1
+          fi
+          REMOTE
+          rc=${PIPESTATUS[0]}
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "### AlmaLinux${SRC_VER} \`${VENDOR}\` rpm → AlmaLinux ${DST_VER} (\`${MODE}\`)"
+            if [ "${{ steps.test.outputs.rc }}" = "0" ]; then echo "**✅ 호환 (modprobe 성공)**"; else echo "**❌ 비호환 / 실패**"; fi
+            echo '```'
+            grep -E '^(RESULT|MISMATCH) ' result.log 2>/dev/null | sed -E 's/^(RESULT|MISMATCH) //' || echo "(no result)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "${{ steps.test.outputs.rc }}" = "0" ]
+
+      - name: Shut down VM
+        if: always()
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'sudo shutdown -h now' || true
