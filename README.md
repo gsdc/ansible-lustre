@@ -48,9 +48,9 @@ Role Variables
 현재 지원하는 OS/vendor 조합
 ----------------------------
 * AlmaLinux 8.10: `ddn` (release 기반)
-* AlmaLinux 9.7, 9.8: `cray`, `ddn` (release 기반)
+* AlmaLinux 9.7, 9.8, 9.9: `cray`, `ddn` (release 기반)
 * AlmaLinux 9.8: `whamcloud` (release 기반, `lustre/lustre-release` 최신 태그 자동 추적)
-* Rocky 9.7, 9.8: `cray` (release 기반)
+* Rocky 9.7, 9.8, 9.9: `cray` (release 기반)
 
 Dependencies
 ------------
