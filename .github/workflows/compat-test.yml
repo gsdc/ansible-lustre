@@ -9,10 +9,6 @@ name: Test existing Lustre RPMs on a newer OS minor
 # 를 각각 확인한다. kmod가 실패하면 커널 symvers와 모듈 CRC를 비교해서 kABI가
 # 깨진 심볼 목록도 결과 요약에 남긴다.
 on:
-  # 이 파일이 바뀌어 push되면 기본값(9.8 -> 9.9, ddn+cray)으로 한 번 돈다.
-  push:
-    paths:
-      - '.github/workflows/compat-test.yml'
   workflow_dispatch:
     inputs:
       source_version:
