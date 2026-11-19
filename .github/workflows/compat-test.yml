@@ -207,10 +207,11 @@ jobs:
               elfutils-libelf-devel openssl-devel keyutils-libs-devel
           fi
 
-          if sudo dnf -y install $HOME/*.rpm; then
+          if sudo dnf -y install $HOME/*.rpm 2>&1 | tee /tmp/dnf.log; then
             echo "RESULT dnf_install=ok"
           else
             echo "RESULT dnf_install=FAIL"
+            echo "RESULT dnf_unresolved_kernel_symbols=$(grep -c 'nothing provides kernel(' /tmp/dnf.log)"
             if [ "$MODE" = "kmod" ]; then
               # rpm 의존성(kernel(symbol)=hash 등)에서 막힌 경우에도 실제 모듈이
               # 새 커널에서 쓸 수 있는지 보기 위해 --nodeps로 강제 설치해 본다.
@@ -232,9 +233,13 @@ jobs:
             echo "--- weak-updates for $kver ---"
             ls -l "/lib/modules/$kver/weak-updates/" -R 2>/dev/null | grep -E '\.ko' || echo "(none)"
             # kABI 진단: 모듈이 참조하는 커널 심볼의 CRC를 새 커널의 symvers와 비교.
-            symvers="/lib/modules/$kver/symvers.xz"
-            if [ -f "$symvers" ]; then
-              xzcat "$symvers" | awk '{print $2, $1}' | sort > /tmp/kernel.crc
+            # EL9는 symvers.gz, 일부 커널은 symvers.xz로 배포된다.
+            symvers=$(ls /lib/modules/$kver/symvers.{gz,xz} /boot/symvers-$kver.{gz,xz} 2>/dev/null | head -n1)
+            if [ -z "$symvers" ]; then
+              echo "RESULT kabi_check=skipped (symvers not found)"
+            else
+              case "$symvers" in *.xz) xzcat "$symvers";; *) zcat "$symvers";; esac \
+                | awk '{print $2, $1}' | sort > /tmp/kernel.crc
               : > /tmp/mismatch
               for ko in $(rpm -ql $(rpm -qa 'kmod-lustre-client*') | grep '\.ko'); do
                 f="$ko"; case "$ko" in *.xz) xz -dc "$ko" > /tmp/m.ko; f=/tmp/m.ko;; esac
