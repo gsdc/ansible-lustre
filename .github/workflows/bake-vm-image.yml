@@ -192,7 +192,7 @@ jobs:
         run: |
           qemu-system-x86_64 \
             -machine accel=kvm -cpu host -smp 2 -m 4096 \
-            -drive file=disk.qcow2,if=virtio \
+            -drive file=disk.qcow2,if=virtio,discard=unmap,detect-zeroes=unmap \
             -drive file=seed.iso,if=virtio,format=raw \
             -nic user,model=virtio,hostfwd=tcp::2222-:22 \
             -display none -daemonize \
@@ -273,6 +273,30 @@ jobs:
             git autoconf automake pkgconfig unzip'
           ssh_run 'rpmdev-setuptree'
 
+      - name: Shrink guest disk before shutdown
+        if: ${{ steps.existing.outputs.exists != 'true' }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'bash -s' <<'REMOTE'
+          set -x
+          df -h /
+          # The VM is now running the updated kernel, so the cloud image's
+          # original kernel (and its modules) is dead weight.
+          sudo dnf -y remove --oldinstallonly || true
+          sudo dnf clean all
+          sudo rm -rf /var/cache/dnf/* /var/tmp/* /tmp/*
+          sudo journalctl --vacuum-time=1s || true
+          sudo rm -f /var/log/*.log /var/log/dnf* 2>/dev/null || true
+          # Hand freed blocks back to the qcow2 (disk is attached with
+          # discard=unmap). If trim isn't available, zero-fill instead so
+          # qemu-img convert -c can drop those clusters.
+          if ! sudo fstrim -av; then
+            sudo dd if=/dev/zero of=/var/zerofill bs=1M status=none || true
+            sudo rm -f /var/zerofill
+          fi
+          sync
+          df -h /
+          REMOTE
+
       - name: Shut down VM
         if: ${{ steps.existing.outputs.exists != 'true' }}
         run: |
@@ -291,10 +315,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          qemu-img convert -O qcow2 -c disk.qcow2 "baked-${{ matrix.os_key }}.qcow2"
-          ls -lh "baked-${{ matrix.os_key }}.qcow2"
+          set -euo pipefail
+          img="baked-${{ matrix.os_key }}.qcow2"
+          qemu-img convert -O qcow2 -c disk.qcow2 "$img"
+          ls -lh "$img"
+          sha256sum "$img" | awk '{print $1}' > "$img.sha256"
+          # GitHub Release assets must be < 2 GiB each, so always upload the
+          # image as numbered parts (a small image is just one part).
+          # build.yml downloads baked-<os_key>.qcow2.part-* and cats them back
+          # together, checking the result against $img.sha256.
+          split -b 1900M -d -a 3 "$img" "$img.part-"
+          rm -f "$img"
+          ls -lh "$img".part-*
           tag="vm-image-${{ matrix.os_key }}"
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
             --title "Lustre build VM image: ${{ matrix.os_key }}" \
-            --notes "Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}) build VM: epel-release + CRB + Development Tools + matching kernel-devel/headers, already rebooted into its latest kernel. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml."
-          gh release upload "$tag" "baked-${{ matrix.os_key }}.qcow2" --clobber
+            --notes "Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}) build VM: epel-release + CRB + Development Tools + matching kernel-devel/headers, already rebooted into its latest kernel. Stored as split parts (baked-${{ matrix.os_key }}.qcow2.part-NNN, concatenate in order; sha256 in baked-${{ matrix.os_key }}.qcow2.sha256) because release assets are limited to 2 GiB each. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml."
+          new_assets=$(ls "$img".part-* "$img.sha256")
+          gh release upload "$tag" $new_assets --clobber
+          # Drop assets from earlier bakes that this one didn't replace (the
+          # old single-file image, or extra parts if the image shrank).
+          gh release view "$tag" --json assets -q '.assets[].name' | while read -r name; do
+            if ! printf '%s\n' $new_assets | grep -qxF "$name"; then
+              echo "Removing stale asset $name"
+              gh release delete-asset "$tag" "$name" -y
+            fi
+          done
