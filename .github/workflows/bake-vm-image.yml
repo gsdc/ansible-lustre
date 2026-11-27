@@ -346,7 +346,8 @@ jobs:
             sudo dnf -y -q group mark remove "$g" || true
           done
           before=$(rpm -qa | wc -l)
-          sudo dnf -y -q mark remove $(rpm -qa --qf '%{NAME}\n' | sort -u) >/dev/null
+          # gpg-pubkey entries are imported repo keys, not packages dnf knows.
+          sudo dnf -y -q mark remove $(rpm -qa --qf '%{NAME}\n' | grep -vx gpg-pubkey | sort -u) >/dev/null
           sudo dnf -y -q mark install "${keep[@]}" >/dev/null
           echo "Packages to be removed:"
           sudo dnf autoremove --assumeno || true
