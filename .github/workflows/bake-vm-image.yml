@@ -396,6 +396,7 @@ jobs:
           rm -rf "$d"
           echo "Smoke test passed on $(uname -r), $(rpm -qa | wc -l) packages installed."
           REMOTE
+          ssh_run 'uname -r' > baked-kernel.txt
 
       - name: Shrink guest disk before shutdown
         if: ${{ steps.existing.outputs.exists != 'true' }}
@@ -442,6 +443,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          BAKED_KERNEL=$(cat baked-kernel.txt 2>/dev/null || true)
           img="baked-${{ matrix.os_key }}.qcow2"
           qemu-img convert -O qcow2 -c disk.qcow2 "$img"
           ls -lh "$img"
@@ -454,9 +456,23 @@ jobs:
           rm -f "$img"
           ls -lh "$img".part-*
           tag="vm-image-${{ matrix.os_key }}"
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<NOTES
+          Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} Lustre build VM: epel-release + CRB + Lustre kmod/DKMS build deps + matching kernel-devel/headers, already rebooted into its latest kernel and pruned of packages the build doesn't need. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml.
+
+          Stored as split parts (\`$img.part-NNN\`, concatenate in order) because release assets are limited to 2 GiB each; the sha256 of the whole image is in \`$img.sha256\`.
+
+          | | |
+          |---|---|
+          | Last baked | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Kernel | \`${BAKED_KERNEL:-unknown}\` |
+          | Image size | $(du -ch "$img".part-* | tail -n1 | cut -f1) in $(ls "$img".part-* | wc -l) part(s) |
+          | Commit | \`${{ github.sha }}\` (${{ github.ref_name }}) |
+          | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+          NOTES
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
             --title "Lustre build VM image: ${{ matrix.os_key }}" \
-            --notes "Pre-baked ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}) build VM: epel-release + CRB + Development Tools + matching kernel-devel/headers, already rebooted into its latest kernel. Stored as split parts (baked-${{ matrix.os_key }}.qcow2.part-NNN, concatenate in order; sha256 in baked-${{ matrix.os_key }}.qcow2.sha256) because release assets are limited to 2 GiB each. Rebuilt on demand via workflow_dispatch of bake-vm-image.yml."
+            --notes-file "$notes_file"
           new_assets=$(ls "$img".part-* "$img.sha256")
           gh release upload "$tag" $new_assets --clobber
           # Drop assets from earlier bakes that this one didn't replace (the
@@ -467,3 +483,4 @@ jobs:
               gh release delete-asset "$tag" "$name" -y
             fi
           done
+          gh release edit "$tag" --notes-file "$notes_file"

@@ -587,10 +587,34 @@ jobs:
           fi
           source_base="${SOURCE_NAME%.tar.gz}"
           tag="lustre-${{ matrix.label }}-${source_base}"
+          # The kernel the kmod was compiled and modprobe-verified against
+          # (the VM is still up at this point).
+          build_kernel=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 \
+            builder@127.0.0.1 'uname -r' 2>/dev/null || echo unknown)
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<NOTES
+          Compiled from srpm/${SOURCE_NAME} for ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}). Built and modprobe-verified against a real kernel by .github/workflows/build.yml.
+
+          | | |
+          |---|---|
+          | Last built | $(date -u '+%Y-%m-%d %H:%M UTC') |
+          | Kernel | \`${build_kernel}\` |
+          | Source | \`srpm/${SOURCE_NAME}\` |
+          | Commit | \`${{ github.sha }}\` (${{ github.ref_name }}) |
+          | Workflow run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+          A rebuild overwrites the rpm assets in place (same tag, same file
+          names), so the release date shown above this text stays at the
+          first publish; "Last built" is the date of the current assets.
+          NOTES
           gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" \
             --title "Lustre client RPMs: ${{ matrix.label }} (${SOURCE_NAME})" \
-            --notes "Compiled from srpm/${SOURCE_NAME} for ${{ matrix.distribution }} ${{ matrix.version }} (${{ matrix.vendor }}). Built and modprobe-verified against a real kernel by .github/workflows/build.yml."
+            --notes-file "$notes_file"
           gh release upload "$tag" "${rpm_files[@]}" --clobber
+          # Refresh the notes on every rebuild so the release page shows when
+          # and against which kernel the current assets were built.
+          gh release edit "$tag" --notes-file "$notes_file"
+          echo "::notice::Published ${#rpm_files[@]} rpm(s) to release '$tag' (kernel ${build_kernel})"
 
           # Only the latest source's release should survive per label: remove
           # any other "lustre-<label>-*" release left over from a previous
