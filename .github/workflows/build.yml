@@ -147,8 +147,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "${{ steps.baked.outputs.tag }}" --pattern '*.qcow2' --clobber
-          mv "baked-${{ matrix.os_key }}.qcow2" disk.qcow2
+          set -euo pipefail
+          img="baked-${{ matrix.os_key }}.qcow2"
+          gh release download "${{ steps.baked.outputs.tag }}" --pattern "${img}*" --clobber
+          if ls "$img".part-* >/dev/null 2>&1; then
+            # bake-vm-image.yml splits the image into <2 GiB parts
+            # (release asset size limit); glob order == part order.
+            cat "$img".part-* > disk.qcow2
+            rm -f "$img".part-*
+          elif [ -f "$img" ]; then
+            # Older releases baked before the split upload.
+            mv "$img" disk.qcow2
+          else
+            echo "::error::Release ${{ steps.baked.outputs.tag }} has neither $img nor $img.part-* assets"
+            exit 1
+          fi
+          if [ -f "$img.sha256" ]; then
+            echo "$(cat "$img.sha256")  disk.qcow2" | sha256sum -c -
+          fi
           ls -lh disk.qcow2
 
       - name: Locate cloud image URL

@@ -157,8 +157,34 @@ VM 준비(패키지 설치, 재부팅)는 어떤 Lustre 소스를 빌드하든 �
 `bake-vm-image.yml`은 이미 `vm-image-<os_key>` release가 있으면 기본적으로
 다시 굽지 않고 건너뜁니다. 빌드 의존성 목록이나 커널이 바뀌어서 강제로 다시
 구워야 하면, `workflow_dispatch` 실행 시 `force: true` 입력을 주면 됩니다
-(같은 태그에 `--clobber`로 덮어씀). GitHub Release 애셋은 파일당 2GiB
-제한이 있어서, 이미지가 이 이상 커지면 저장 방식을 바꿔야 할 수 있습니다.
+(같은 태그에 `--clobber`로 덮어씀).
+
+GitHub Release 애셋은 파일당 2GiB 미만이어야 해서, 구운 이미지는 항상
+1900MiB 단위로 쪼개 `baked-<os_key>.qcow2.part-000`, `part-001`, ... 으로
+올리고 전체 파일의 sha256을 `baked-<os_key>.qcow2.sha256`에 같이 올립니다.
+`build.yml`은 part들을 순서대로 이어 붙인 뒤 sha256을 확인합니다(예전처럼
+단일 `baked-<os_key>.qcow2`만 있는 release도 그대로 받아 씀). 다시 구울 때
+이번에 올리지 않은 이전 애셋(예전 단일 파일, 남는 part)은 지웁니다. 또한
+업로드 크기를 줄이려고 VM 종료 전에 이전 커널 제거, dnf 캐시/로그 정리,
+`fstrim`(디스크를 `discard=unmap`으로 붙임)을 수행합니다.
+
+또한 굽기 마지막에 Lustre 커널모듈/DKMS 빌드와 무관한 패키지를 정리합니다.
+모든 패키지를 dependency로 표시한 뒤 keep 목록(빌드 의존성, 부팅·네트워크·
+cloud-init·SSH에 필요한 시스템 패키지, `core` 그룹 필수 패키지, grub/shim/release
+패키지)만 user-installed로 표시하고 `dnf autoremove`로 나머지를 지웁니다.
+정리한 뒤에는 재부팅해서 SSH가 다시 붙는지 확인하고, 필수 빌드 도구와
+`%kernel_module_package_buildreqs`가 남아 있는지, 간단한 out-of-tree 커널 모듈이
+빌드되는지까지 검사합니다. 하나라도 실패하면 업로드하지 않습니다. 빌드가
+패키지 누락으로 실패하면 `bake-vm-image.yml`의 `BUILD_KEEP`에 그 패키지를
+추가하고 `force: true`로 다시 구우면 됩니다.
+
+로컬에서 직접 받아 쓸 때:
+
+```bash
+gh release download vm-image-CentOSStream9 --pattern 'baked-CentOSStream9.qcow2*'
+cat baked-CentOSStream9.qcow2.part-* > baked-CentOSStream9.qcow2
+echo "$(cat baked-CentOSStream9.qcow2.sha256)  baked-CentOSStream9.qcow2" | sha256sum -c -
+```
 
 `workflow_dispatch`의 `os_key` 입력(예: `Rocky9.7`)을 채우면 그 OS 하나만
 대상으로 discover/bake가 돕니다. 비워두면 지금까지처럼 전체 OS를 대상으로

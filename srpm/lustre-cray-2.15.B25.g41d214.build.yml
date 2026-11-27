@@ -9,11 +9,17 @@ targets:
   - distribution: AlmaLinux
     version: "9.8"
     vendor: cray
+  - distribution: AlmaLinux
+    version: "9.9"
+    vendor: cray
   - distribution: Rocky
     version: "9.7"
     vendor: cray
   - distribution: Rocky
     version: "9.8"
+    vendor: cray
+  - distribution: Rocky
+    version: "9.9"
     vendor: cray
   - distribution: CentOSStream
     version: "9"
