@@ -168,6 +168,16 @@ GitHub Release 애셋은 파일당 2GiB 미만이어야 해서, 구운 이미지
 업로드 크기를 줄이려고 VM 종료 전에 이전 커널 제거, dnf 캐시/로그 정리,
 `fstrim`(디스크를 `discard=unmap`으로 붙임)을 수행합니다.
 
+또한 굽기 마지막에 Lustre 커널모듈/DKMS 빌드와 무관한 패키지를 정리합니다.
+모든 패키지를 dependency로 표시한 뒤 keep 목록(빌드 의존성, 부팅·네트워크·
+cloud-init·SSH에 필요한 시스템 패키지, `core` 그룹 필수 패키지, grub/shim/release
+패키지)만 user-installed로 표시하고 `dnf autoremove`로 나머지를 지웁니다.
+정리한 뒤에는 재부팅해서 SSH가 다시 붙는지 확인하고, 필수 빌드 도구와
+`%kernel_module_package_buildreqs`가 남아 있는지, 간단한 out-of-tree 커널 모듈이
+빌드되는지까지 검사합니다. 하나라도 실패하면 업로드하지 않습니다. 빌드가
+패키지 누락으로 실패하면 `bake-vm-image.yml`의 `BUILD_KEEP`에 그 패키지를
+추가하고 `force: true`로 다시 구우면 됩니다.
+
 로컬에서 직접 받아 쓸 때:
 
 ```bash

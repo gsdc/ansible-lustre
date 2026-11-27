@@ -273,6 +273,129 @@ jobs:
             git autoconf automake pkgconfig unzip'
           ssh_run 'rpmdev-setuptree'
 
+      # Strip the image down to what the Lustre kmod/dkms rpmbuild in
+      # build.yml actually needs (plus what it takes to boot, get an IP,
+      # run cloud-init and accept SSH). Everything else the cloud image or
+      # "@Development Tools" dragged in (cockpit, firewalld, tuned, rsyslog,
+      # gdb, valgrind, systemtap, firmware, ...) is removed with dnf
+      # autoremove: every package is marked as a mere dependency, only the
+      # keep list below is marked user-installed, so autoremove drops
+      # whatever nothing in the keep list depends on.
+      # If a build later fails on a missing tool/BuildRequires, add it to
+      # BUILD_KEEP here and rebake with force=true.
+      - name: Prune packages unrelated to the Lustre build
+        if: ${{ steps.existing.outputs.exists != 'true' }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          # Lustre kmod/dkms build: same list build.yml installs from
+          # scratch, with "@Development Tools" narrowed to the toolchain
+          # pieces lustre.spec / the kernel module build actually use
+          # (BuildRequires: libtool flex bison redhat-rpm-config rpm-build
+          # pkgconfig systemd %kernel_module_package_buildreqs ...).
+          BUILD_KEEP="
+            autoconf automake binutils bison flex gcc gcc-c++ glibc-devel libtool make patch
+            pkgconf pkgconf-m4 pkgconf-pkg-config redhat-rpm-config rpm-build rpmdevtools rpmrebuild
+            kernel kernel-devel-$(uname -r) kernel-headers kernel-abi-stablelists kernel-abi-whitelists kernel-rpm-macros
+            elfutils-libelf-devel elfutils-devel kmod dkms dwarves
+            openssl-devel libmount-devel libnl3-devel libselinux-devel libselinux-static
+            zlib-devel libyaml-devel keyutils-libs-devel json-c-devel
+            e2fsprogs-devel libcom_err-devel ncurses-devel ncurses-c++-libs
+            python3 python3-devel python3-pip perl-interpreter
+            git unzip tar gzip bzip2 xz diffutils findutils file which bc systemd
+            dnf-plugins-core epel-release
+          "
+          # What the VM itself needs to boot, get networking, run
+          # cloud-init (build.yml injects a fresh SSH key through it), accept
+          # SSH/scp and keep dnf usable.
+          SYSTEM_KEEP="
+            kernel-core kernel-modules kernel-modules-core dracut grubby
+            cloud-init cloud-utils-growpart NetworkManager
+            openssh-server openssh-clients sudo
+            selinux-policy-targeted policycoreutils
+            dnf yum rpm ca-certificates curl glibc-langpack-en
+            xfsprogs e2fsprogs lvm2 passwd shadow-utils util-linux coreutils bash procps-ng iproute hostname
+          "
+          # The minimal "core" group, plus bootloader and distro release/repo
+          # packages by name pattern.
+          CORE_KEEP=$(dnf -q group info core 2>/dev/null \
+            | awk '/^ *Mandatory Packages:/{f=1;next} /^ *[A-Z][a-zA-Z ]*Packages:/{f=0} f && NF {print $NF}' \
+            | sed 's/^[^a-zA-Z0-9]*//' || true)
+          PATTERN_KEEP=$(rpm -qa --qf '%{NAME}\n' | grep -E '^(grub2-|shim-|efibootmgr$)|-release$|-repos$|-gpg-keys$' || true)
+
+          keep=()
+          for spec in $BUILD_KEEP $SYSTEM_KEEP $CORE_KEEP $PATTERN_KEEP; do
+            # Resolve names (incl. versioned ones like kernel-devel-<kver>)
+            # and provides (e.g. pkgconfig) to installed package names;
+            # silently skip ones not installed on this distro/version (e.g.
+            # kernel-abi-whitelists on EL9, lvm2 on a non-LVM image). rpm
+            # prints "package X is not installed" / "no package provides X"
+            # on stdout, hence the no-spaces filter.
+            while read -r name; do
+              keep+=("$name")
+            done < <( { rpm -q --qf '%{NAME}\n' "$spec" 2>/dev/null \
+                        || rpm -q --whatprovides --qf '%{NAME}\n' "$spec" 2>/dev/null; } \
+                      | grep -E '^[^ ]+$' || true)
+          done
+          mapfile -t keep < <(printf '%s\n' "${keep[@]}" | sort -u)
+          echo "Keeping ${#keep[@]} explicitly installed packages:"
+          printf '  %s\n' "${keep[@]}"
+
+          # Drop group bookkeeping so group membership can't pin anything.
+          for g in $(dnf -q group list --installed --ids --hidden 2>/dev/null | sed -n 's/.*(\([^)]*\))$/\1/p'); do
+            sudo dnf -y -q group mark remove "$g" || true
+          done
+          before=$(rpm -qa | wc -l)
+          sudo dnf -y -q mark remove $(rpm -qa --qf '%{NAME}\n' | sort -u) >/dev/null
+          sudo dnf -y -q mark install "${keep[@]}" >/dev/null
+          echo "Packages to be removed:"
+          sudo dnf autoremove --assumeno || true
+          sudo dnf -y autoremove
+          after=$(rpm -qa | wc -l)
+          echo "::notice::Pruned packages: ${before} -> ${after}"
+          REMOTE
+
+      # Make sure the pruned image still boots, comes back on SSH and can
+      # still build a kernel module before it gets published.
+      - name: Verify pruned image (reboot + build smoke test)
+        if: ${{ steps.existing.outputs.exists != 'true' }}
+        run: |
+          ssh_run() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i vm_key -p 2222 builder@127.0.0.1 "$@"; }
+          ssh_run 'sudo systemctl reboot' || true
+          sleep 10
+          up=false
+          for i in $(seq 1 60); do
+            if ssh_run true 2>/dev/null; then up=true; break; fi
+            sleep 5
+          done
+          if [ "$up" != "true" ]; then
+            echo "::error::Pruned VM did not come back after reboot"
+            tail -n 100 console.log || true
+            exit 1
+          fi
+          ssh_run 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          for cmd in gcc g++ make autoconf automake libtoolize autoreconf flex bison \
+                     pkg-config rpmbuild rpmdev-setuptree rpmspec git unzip tar dkms \
+                     python3 perl scp sudo; do
+            command -v "$cmd" >/dev/null || { echo "::error::'$cmd' missing after pruning"; exit 1; }
+          done
+          test -d "/lib/modules/$(uname -r)/build" || { echo "::error::kernel-devel for $(uname -r) missing"; exit 1; }
+          rpm --eval '%kernel_module_package_buildreqs' | tr ' ,' '\n\n' | grep -E '^[a-z]' | sort -u | while read -r req; do
+            rpm -q --whatprovides "$req" >/dev/null || { echo "::error::kernel module BuildRequires '$req' missing after pruning"; exit 1; }
+          done
+          # Build and load-check a trivial out-of-tree kernel module.
+          d=$(mktemp -d)
+          printf '%s\n' '#include <linux/module.h>' 'MODULE_LICENSE("GPL");' \
+            'static int __init h_init(void){return 0;}' 'static void __exit h_exit(void){}' \
+            'module_init(h_init); module_exit(h_exit);' > "$d/hello.c"
+          echo 'obj-m := hello.o' > "$d/Makefile"
+          make -s -C "/lib/modules/$(uname -r)/build" M="$d" modules
+          modinfo "$d/hello.ko" >/dev/null
+          rm -rf "$d"
+          echo "Smoke test passed on $(uname -r), $(rpm -qa | wc -l) packages installed."
+          REMOTE
+
       - name: Shrink guest disk before shutdown
         if: ${{ steps.existing.outputs.exists != 'true' }}
         run: |
@@ -284,6 +407,8 @@ jobs:
           sudo dnf -y remove --oldinstallonly || true
           sudo dnf clean all
           sudo rm -rf /var/cache/dnf/* /var/tmp/* /tmp/*
+          # Docs/man/info pages are never read in the build VM.
+          sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/*
           sudo journalctl --vacuum-time=1s || true
           sudo rm -f /var/log/*.log /var/log/dnf* 2>/dev/null || true
           # Hand freed blocks back to the qcow2 (disk is attached with
